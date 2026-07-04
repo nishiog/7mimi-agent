@@ -167,6 +167,87 @@ def cmd_research_stock(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_mcp_x_readonly(args: argparse.Namespace) -> int:
+    """ADR-015: run the x-mcp-readonly MCP protocol server."""
+    from shichimimi_agent.mcp.x_readonly_server import serve_forever
+
+    serve_forever(host=args.host, port=args.port)
+    return 0
+
+
+def cmd_x_smoke(args: argparse.Namespace) -> int:
+    """Connection-test CLI for x-mcp-readonly: authorize then call x.search_posts_recent."""
+    import os
+
+    from shichimimi_agent.hooks.post_tool_use import run_post_tool_use
+    from shichimimi_agent.hooks.pre_tool_use import PreToolUseInput, run_pre_tool_use
+    from shichimimi_agent.mcp.client import McpClientError, McpHttpClient
+    from shichimimi_agent.proxies.auth_proxy_client import AuthProxyClient
+    from shichimimi_agent.security.policy_engine import PolicyEngine
+
+    try:
+        config = _load_validated_config(args.root)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    migrate(default_db_path(config.root))
+    repository = Repository.for_root(config.root)
+
+    role = "ai_it_topic_runner"
+    session_id = repository.create_session(source="x-smoke", role=role, workspace_path="")
+    create_workspace(config.root, session_id)
+    repository.update_session_status(session_id, "running")
+    task_id = repository.create_task(session_id=session_id, role=role, input_data={"query": args.query, "max_results": args.max_results})
+
+    auth_client = AuthProxyClient(local_fallback_engine=PolicyEngine(config.policy))
+    tool_name = "x.search_posts_recent"
+    arguments = {"query": args.query, "max_results": args.max_results}
+    decision = run_pre_tool_use(
+        auth_client,
+        PreToolUseInput(session_id=session_id, task_id=task_id, role=role, tool_name=tool_name, arguments=arguments),
+    )
+    run_post_tool_use(
+        repository,
+        session_id=session_id,
+        task_id=task_id,
+        role=role,
+        tool_name=tool_name,
+        decision=decision.decision,
+        success=1 if decision.allowed else 0,
+        output_size=0,
+    )
+    if not decision.allowed:
+        repository.finish_task(task_id, status="failed", error={"type": "PermissionError", "message": decision.reason})
+        repository.update_session_status(session_id, "failed")
+        print(f"error: blocked by policy: {decision.reason}", file=sys.stderr)
+        return 1
+
+    mcp_url = args.mcp_url or os.environ.get("X_MCP_URL", "http://127.0.0.1:18082")
+    client = McpHttpClient(base_url=mcp_url)
+    try:
+        client.initialize()
+        result = client.call_tool(tool_name, arguments)
+    except McpClientError as exc:
+        repository.finish_task(task_id, status="failed", error={"type": "McpClientError", "message": str(exc)})
+        repository.update_session_status(session_id, "failed")
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    content_items = result.get("content") or []
+    text = content_items[0]["text"] if content_items else "{}"
+    if result.get("isError"):
+        repository.finish_task(task_id, status="failed", error={"type": "McpToolError", "message": text})
+        repository.update_session_status(session_id, "failed")
+        print(f"error: {text}", file=sys.stderr)
+        return 1
+
+    payload = json.loads(text)
+    repository.finish_task(task_id, status="succeeded", output=payload)
+    repository.update_session_status(session_id, "stopped")
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="shichimimi-agent")
     parser.add_argument("--root", help="project root", default=None)
@@ -212,6 +293,17 @@ def build_parser() -> argparse.ArgumentParser:
     claude_smoke.add_argument("--image", default="7mimi-agent-runner:latest")
     claude_smoke.add_argument("--network", default="bridge")
     claude_smoke.set_defaults(func=cmd_claude_smoke)
+
+    mcp_x_readonly = sub.add_parser("mcp-x-readonly")
+    mcp_x_readonly.add_argument("--host", default="127.0.0.1")
+    mcp_x_readonly.add_argument("--port", type=int, default=18082)
+    mcp_x_readonly.set_defaults(func=cmd_mcp_x_readonly)
+
+    x_smoke = sub.add_parser("x-smoke")
+    x_smoke.add_argument("--query", default="MCP server")
+    x_smoke.add_argument("--max-results", type=int, default=10)
+    x_smoke.add_argument("--mcp-url", default=None)
+    x_smoke.set_defaults(func=cmd_x_smoke)
 
     stock = sub.add_parser("research-stock")
     stock.add_argument("ticker")
