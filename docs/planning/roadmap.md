@@ -78,9 +78,9 @@
 
 ### Phase 2: Policy and hooks
 
-- [ ] PreToolUse hook
-- [ ] PostToolUse hook
-- [ ] tool allowlist per role
+- [x] PreToolUse hook
+- [x] PostToolUse hook
+- [x] tool allowlist per role
 - [ ] secret redaction
 - [ ] X write tool block tests
 - [ ] prompt injection fixture tests
@@ -137,14 +137,14 @@
 
 ### Phase G1: Go proxy MVPs
 
-- [ ] `services/claude-proxy` Go HTTP service
-- [ ] `GET /healthz`
-- [ ] `POST /v1/messages`
-- [ ] provider credential injection
-- [ ] streaming/copy response pass-through
-- [ ] audit metadata log
-- [ ] `services/auth-proxy` Go HTTP service
-- [ ] `POST /v1/tool/authorize`
-- [ ] embedded dev policy for `ai_it_topic_runner`
-- [ ] Go tests
-- [ ] Dockerfiles for both proxy services
+- [x] `services/claude-proxy` Go HTTP service
+- [x] `GET /healthz`
+- [x] `POST /v1/messages`
+- [x] provider credential injection
+- [x] streaming/copy response pass-through
+- [x] audit metadata log
+- [x] `services/auth-proxy` Go HTTP service
+- [x] `POST /v1/tool/authorize`
+- [x] embedded dev policy for `ai_it_topic_runner`
+- [x] Go tests
+- [x] Dockerfiles for both proxy services

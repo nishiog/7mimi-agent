@@ -9,6 +9,7 @@ from shichimimi_agent.documents.markdown import TopicDigestItem, render_ai_it_da
 from shichimimi_agent.documents.repository_writer import DocumentRepositoryWriter
 from shichimimi_agent.hooks.post_tool_use import run_post_tool_use
 from shichimimi_agent.hooks.pre_tool_use import PreToolUseInput, run_pre_tool_use
+from shichimimi_agent.proxies.auth_proxy_client import AuthProxyClient
 from shichimimi_agent.security.policy_engine import PolicyEngine
 from shichimimi_agent.util.time import now_jst
 
@@ -24,10 +25,18 @@ class RunnerResult:
 class AiItTopicRunner:
     role = "ai_it_topic_runner"
 
-    def __init__(self, *, config: AppConfig, repository: Repository, policy_engine: PolicyEngine) -> None:
+    def __init__(
+        self,
+        *,
+        config: AppConfig,
+        repository: Repository,
+        policy_engine: PolicyEngine,
+        auth_client: AuthProxyClient | None = None,
+    ) -> None:
         self.config = config
         self.repository = repository
         self.policy_engine = policy_engine
+        self.auth_client = auth_client or AuthProxyClient(local_fallback_engine=policy_engine)
         self.writer = DocumentRepositoryWriter(config.root)
 
     def run_daily_digest(self, *, session_id: str, task_id: str, job: dict[str, Any], dry_run: bool = True) -> RunnerResult:
@@ -45,9 +54,10 @@ class AiItTopicRunner:
         repo = (job.get("output") or {}).get("repo", "nishiog/ai-it-research-notes")
 
         decision = run_pre_tool_use(
-            self.policy_engine,
+            self.auth_client,
             PreToolUseInput(
                 session_id=session_id,
+                task_id=task_id,
                 role=self.role,
                 tool_name="document.commit_and_push_markdown_repo",
                 arguments={"repo": repo, "path": relative_path},
@@ -84,8 +94,14 @@ class AiItTopicRunner:
     def _collect_mock_topics(self, *, session_id: str, task_id: str, queries: list[str]) -> list[TopicDigestItem]:
         for query in queries[:3]:
             decision = run_pre_tool_use(
-                self.policy_engine,
-                PreToolUseInput(session_id=session_id, role=self.role, tool_name="x.search_posts_recent", arguments={"query": query, "max_results": 50}),
+                self.auth_client,
+                PreToolUseInput(
+                    session_id=session_id,
+                    task_id=task_id,
+                    role=self.role,
+                    tool_name="x.search_posts_recent",
+                    arguments={"query": query, "max_results": 50},
+                ),
             )
             run_post_tool_use(
                 self.repository,
