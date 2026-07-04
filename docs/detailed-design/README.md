@@ -660,6 +660,33 @@ runner に渡す入力は以下。
 }
 ```
 
+
+#### 21.9.4 Initial ContainerRunnerBackend implementation
+
+The first container runner implementation uses **one request one container**.
+
+```text
+host run-job --runner container
+  ↓
+ContainerRunnerBackend
+  ↓
+docker run --rm 7mimi-agent-runner:latest
+  ↓
+python -m sevenmimi_agent runner-execute ...
+```
+
+Runtime behavior:
+
+- repository root is mounted at `/workspace`
+- container workdir is `/workspace`
+- `PYTHONPATH=/workspace/src` is set so mounted source is used
+- `.data/` and `.sessions/` are shared through the repository mount
+- default Docker network is `none` for mock/dry-run safety
+- allowed envs include `SESSION_ID`, `ROLE`, `WORKSPACE_DIR`, `CLAUDE_PROXY_URL`, `AUTH_PROXY_URL`, and optional session-scoped proxy tokens
+- provider/API credentials such as `ANTHROPIC_API_KEY`, X credentials, J-Quants credentials, and GitHub tokens are not passed into the container
+
+This is intentionally not yet a persistent session runner. Persistent one-session-one-container behavior remains a later phase.
+
 ---
 
 ### 21.10 Claude-proxy detailed design

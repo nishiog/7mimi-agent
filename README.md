@@ -39,3 +39,21 @@ Run tests:
 ```bash
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
+
+## Docker agent-runner
+
+Build the initial one-request-one-container runner image:
+
+```bash
+docker build -f Dockerfile.agent-runner -t 7mimi-agent-runner:latest .
+```
+
+Run the AI/IT daily digest job inside an isolated `agent-runner` container:
+
+```bash
+PYTHONPATH=src python3 -m sevenmimi_agent run-job ai-it-x-daily-digest --dry-run --runner container
+```
+
+The container runner mounts the repository at `/workspace`, writes dry-run output under `.data/dry-run/`, and does not receive provider/API credentials such as `ANTHROPIC_API_KEY`, X credentials, J-Quants credentials, or GitHub tokens.
+
+By default the container runner uses `--network none` for the current mock/dry-run flow. Future real MCP/proxy integrations can opt into an explicit Docker network.
