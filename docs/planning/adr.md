@@ -67,3 +67,9 @@ Reason: agent system と生成 knowledge を分離し、Git履歴をそのまま
 Decision: Implement `claude-proxy` and `auth-proxy` as Go services, while keeping agent orchestration and research logic in Python.
 
 Reason: These proxies are security-sensitive network boundary components. Go is better suited for HTTP reverse proxying, streaming/SSE, concurrency, small static binaries, and container deployment. Python remains better for agent orchestration, data processing, research workflows, and Markdown generation.
+
+### ADR-013: Run Claude Code CLI inside agent-runner via claude-proxy
+
+Decision: agent-runner コンテナに Claude Code CLI(Node.js + `@anthropic-ai/claude-code`)をインストールし、LLM 通信は環境変数(`ANTHROPIC_BASE_URL` → claude-proxy、`ANTHROPIC_AUTH_TOKEN` = session token、`ANTHROPIC_CUSTOM_HEADERS` = `X-7mimi-Session-Id` / `X-7mimi-Role`)で claude-proxy に向ける。claude-proxy は `/v1/messages` 系エンドポイント(`count_tokens` 含む)を pass-through する。container runner の既定は `--network none` のまま維持し、Claude 実行時のみ明示的に bridge ネットワークへ opt-in する。
+
+Reason: ADR-010 の「Claude Code process と workspace は agent-runner に置き、provider credential は claude-proxy に置く」構成を実際に動く形にするため。Claude Code は標準環境変数で base URL / Bearer token / 追加ヘッダを差し替えられるため、コード改変なしで credential boundary を通せる。ネットワークは既定 deny(none)を保ち、必要なジョブだけ opt-in することで isolation の原則を崩さない。

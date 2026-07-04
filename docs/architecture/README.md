@@ -164,6 +164,27 @@ Go を proxy に使う理由:
 - audit / rate-limit middleware を小さく保てる
 - credential boundary を Python の agent runtime から明確に分離できる
 
+### 6.1.3 Claude Code in agent-runner (ADR-013)
+
+agent-runner コンテナは Claude Code CLI を内蔵し、環境変数だけで claude-proxy に向ける。
+
+```text
+agent-runner (container)
+  ├─ Claude Code CLI (@anthropic-ai/claude-code)
+  ├─ ANTHROPIC_BASE_URL   = http://host.docker.internal:18080   # claude-proxy
+  ├─ ANTHROPIC_AUTH_TOKEN = <session token>                      # Bearer、実キーではない
+  └─ ANTHROPIC_CUSTOM_HEADERS = X-7mimi-Session-Id / X-7mimi-Role
+        │
+        ▼
+claude-proxy (host, Go)
+  ├─ session token 検証
+  ├─ x-api-key 注入 (ANTHROPIC_API_KEY)
+  └─ /v1/messages, /v1/messages/count_tokens を pass-through
+```
+
+- ネットワークは既定 `--network none` を維持し、Claude 実行ジョブのみ bridge に opt-in する。
+- `ANTHROPIC_API_KEY` は claude-proxy のみが保持し、runner env allowlist には決して入れない。
+
 ### 6.2 Session lifecycle
 
 ```text

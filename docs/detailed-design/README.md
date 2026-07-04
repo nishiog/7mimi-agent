@@ -1760,3 +1760,23 @@ AuthProxyClient:
   PreToolUse can call auth-proxy /v1/tool/authorize
   local/dev mode may fall back to local PolicyEngine
 ```
+
+#### 21.25.4 Claude Code smoke path (ADR-013)
+
+診断用 CLI `claude-smoke` で、agent-runner コンテナ内の Claude Code が claude-proxy 経由で小タスクを自律実行できることを確認する。
+
+```text
+sevenmimi_agent claude-smoke [--runner container] [--prompt "..."]
+  1. session/workspace を作成
+  2. agent-runner コンテナを bridge network で起動
+  3. コンテナ内で claude -p <prompt> を実行
+     - cwd = session workspace
+     - --allowedTools は Write / Read / Bash(ls など最小限)
+     - ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_CUSTOM_HEADERS で claude-proxy へ
+  4. workspace 内の生成物と claude の JSON 出力を検証
+```
+
+claude-proxy 側の要件:
+
+- `POST /v1/messages` に加え `POST /v1/messages/count_tokens` を同じ検証・注入・監査で pass-through する。
+- runner env allowlist: `CLAUDE_PROXY_URL` / `CLAUDE_PROXY_SESSION_TOKEN` / `SESSION_ID` / `ROLE` のみ。`ANTHROPIC_API_KEY` は禁止(ADR-010)。
