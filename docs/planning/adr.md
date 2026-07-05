@@ -111,3 +111,9 @@ Reason: roadmap の「digest を notes repo に push する縦切り」を最小
 Decision: 収集した X シグナルの要約(what_happened / why_it_matters)は、`CLAUDE_PROXY_URL` と `CLAUDE_PROXY_SESSION_TOKEN` が設定されている場合のみ claude-proxy 経由の `/v1/messages`(非ストリーミング、model は ADR-016 の resolve_model、max_tokens 400)で生成する。LLM 呼び出しは tool `claude.summarize_signals` として PreToolUse 認可を通し、deny・proxy 障害・応答パース失敗のいずれでも決定的構築(ADR-017)へフォールバックして digest 生成を継続する。ポスト本文は信頼できないデータとして system prompt で指示追従を禁止し、出力は JSON 強制+検証する。LLM 出力も signal の要約であり evidence とはしない。
 
 Reason: provider credential を持たない Python orchestration から LLM を使う唯一の経路は claude-proxy であり(ADR-010/012)、要約は digest の品質向上であって可用性要件ではないためフォールバック必須の opt-in が適切。prompt injection は X 由来テキストの主要リスクであり、決定的な認可(hook)と出力形式検証を LLM の外側に置く方針(security boundary 原則)を維持する。
+
+### ADR-020: Git Smart HTTP relay を auth-proxy に実装し、GitHub App 短命 token で書き込みを一本化する
+
+Decision: agent-runner からの git 操作は auth-proxy の `/git/{owner}/{repo}` smart HTTP 透過中継(internal/gitrelay)経由のみとする。runner にはセッション Bearer を `GIT_CONFIG_*` env(URL-scoped `http.<relay>.extraheader`)で注入し、relay は `AUTH_PROXY_SESSION_TOKEN`(未設定時は relay 自体を無効化、デフォルト値なし・fail-closed)と定数時間比較で検証する。GitHub へは GitHub App「7mimi-agent」の installation access token(TTL 1h、残5分で再発行)を `Basic x-access-token:` 形式で注入する。private key はホストのファイル(`GITHUB_APP_PRIVATE_KEY_PATH`、実体は `SHICHIMIMI_AGENT_X_GITHUB_APP_PRIVATE_KEY` が指すパス)として auth-proxy のみが参照する。repo 制限は App の installation 対象(現在 `7milch/ai-it-research-notes` のみ、当面手動管理・将来 `7milch/terraform` で IaC 化)による credential scope で強制し、proxy 側の repo×操作 ACL は複数 role 要件が出るまで実装しない。policy.yaml の `git\s+push` deny パターンは削除する(runner は credential を持たず relay 以外では push 不能のため、書き込み制御点は relay+credential scope に一本化)。runner コンテナ内 git の E2E が成功した時点で ADR-018 のホスト publish 経路(`--publish`)は廃止する。
+
+Reason: ADR-018 は自ら暫定と宣言しており、ホスト credential 依存を解消して「credential-free runner」(ADR-010)を git 書き込みまで拡張するため。強制点を proxy の判定ロジックではなく短命 token の scope に置くのは Mercari pcp-agent と同方式で、判定コードの増殖を避けつつ機械的な制限を維持できる。

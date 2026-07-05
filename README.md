@@ -101,3 +101,30 @@ PYTHONPATH=src python3 -m shichimimi_agent claude-smoke
 ```
 
 The default task asks Claude to write `hello.md` in the session workspace (`.sessions/<session>/workspace/`). Use `--prompt` to override.
+
+## Git relay (ADR-020)
+
+agent-runner never holds git credentials. Instead, git talks to auth-proxy's `/git/{owner}/{repo}` Smart HTTP relay, which authenticates the runner's session bearer token and forwards to GitHub using a short-lived GitHub App installation access token.
+
+A GitHub App (`7mimi-agent`, permission `Contents: Read and write`) has already been created and installed on `7milch/ai-it-research-notes`. Adding more repos means adding them to that installation.
+
+Start auth-proxy with the relay enabled:
+
+```bash
+export AUTH_PROXY_SESSION_TOKEN=$(openssl rand -hex 16)
+export GITHUB_APP_ID=<App ID (App settings page)>
+export GITHUB_APP_PRIVATE_KEY_PATH="$SHICHIMIMI_AGENT_X_GITHUB_APP_PRIVATE_KEY"
+# GITHUB_APP_INSTALLATION_ID is optional — auto-discovered when the App has exactly one installation
+cd services/auth-proxy && go run ./cmd/auth-proxy
+```
+
+The relay only mounts when `AUTH_PROXY_SESSION_TOKEN` is set and the GitHub App credentials resolve successfully; otherwise auth-proxy logs a non-sensitive reason and keeps serving the `/v1/tool/authorize` routes without it.
+
+On the runner side, set `GIT_PROXY_URL` (e.g. `http://host.docker.internal:18081/git`) and `GIT_PROXY_SESSION_TOKEN` (must match `AUTH_PROXY_SESSION_TOKEN`) in the container env. `shichimimi_agent.runner.git_relay_env.build_git_relay_env` turns these into `GIT_CONFIG_*` env vars that route bare `git` through the relay with no on-disk credentials — `runner/claude_smoke.py` wires this in automatically when `GIT_PROXY_URL` is present (and raises early if the session token is missing).
+
+Smoke-test the relay without a full runner container:
+
+```bash
+git -c http.http://127.0.0.1:18081/git/.extraheader="Authorization: Bearer $AUTH_PROXY_SESSION_TOKEN" \
+    ls-remote http://127.0.0.1:18081/git/7milch/ai-it-research-notes
+```

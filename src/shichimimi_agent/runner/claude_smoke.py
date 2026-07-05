@@ -14,6 +14,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from shichimimi_agent.runner.git_relay_env import build_git_relay_env
+
 DEFAULT_PROMPT = (
     "You are running a smoke test. Create a file named hello.md in the current "
     "directory containing a haiku about proxies, then list the directory contents. "
@@ -71,6 +73,21 @@ def build_docker_command(
         "DISABLE_TELEMETRY": "1",
         "DISABLE_ERROR_REPORTING": "1",
     }
+
+    # ADR-020: opt-in git relay wiring. The runner never holds git
+    # credentials; when a proxy URL is configured it must also carry a
+    # session token, otherwise fail fast rather than silently push without
+    # auth.
+    git_proxy_url = os.environ.get("GIT_PROXY_URL")
+    if git_proxy_url:
+        git_proxy_session_token = os.environ.get("GIT_PROXY_SESSION_TOKEN")
+        if not git_proxy_session_token:
+            raise ValueError(
+                "GIT_PROXY_URL is set but GIT_PROXY_SESSION_TOKEN is missing; "
+                "refusing to start the runner without a git relay session token."
+            )
+        env.update(build_git_relay_env(proxy_url=git_proxy_url, session_token=git_proxy_session_token))
+
     env_args: list[str] = []
     for key, value in env.items():
         env_args.extend(["-e", f"{key}={value}"])

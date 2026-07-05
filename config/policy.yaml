@@ -311,7 +311,8 @@ command_policy:
     - "\\.env(\\.|$|\\s)"
     - "id_rsa"
     - "gh\\s+auth\\s+token"
-    - "git\\s+push"
+    # git push is allowed only via the credential-free git relay (ADR-020): the
+    # runner holds no git credentials, so pushes outside the relay cannot authenticate.
     - "npm\\s+publish"
     - "docker\\s+run\\s+.*--privileged"
 
