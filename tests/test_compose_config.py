@@ -1,12 +1,16 @@
-"""Structural checks on docker-compose.yml (Issue #16 / ADR-024).
+"""Structural checks on docker-compose.yml (Issue #16 / ADR-024, Issue #17 /
+ADR-025).
 
 These are lightweight PyYAML parsing checks, not a `docker compose config`
 invocation (Docker isn't guaranteed to be available in CI), to keep the
 resident-stack compose file honest about its expected shape:
-- exactly the three resident services (claude-proxy, auth-proxy, scheduler)
+- exactly the four resident services (claude-proxy, auth-proxy,
+  egress-proxy, scheduler)
 - no plaintext secrets committed (values are all ${VAR} env references)
 - scheduler mounts the host Docker socket
-- proxy ports are published on the host
+- proxy ports are published on the host (egress-proxy is not)
+- the `internal` network is Docker-internal and scheduler/agent-runner are
+  confined to it; claude-proxy/auth-proxy/egress-proxy also reach `egress`
 """
 from __future__ import annotations
 
@@ -47,7 +51,7 @@ class ComposeConfigTest(unittest.TestCase):
         services = self.compose.get("services") or {}
         self.assertEqual(
             set(services.keys()),
-            {"claude-proxy", "auth-proxy", "scheduler"},
+            {"claude-proxy", "auth-proxy", "egress-proxy", "scheduler"},
         )
 
     def test_restart_policy_and_build_context(self) -> None:
@@ -55,6 +59,7 @@ class ComposeConfigTest(unittest.TestCase):
         for name, build_ctx in (
             ("claude-proxy", "services/claude-proxy"),
             ("auth-proxy", "services/auth-proxy"),
+            ("egress-proxy", "services/egress-proxy"),
         ):
             svc = services[name]
             self.assertEqual(svc["restart"], "unless-stopped")
@@ -72,6 +77,36 @@ class ComposeConfigTest(unittest.TestCase):
         self.assertIn("18080:18080", services["claude-proxy"]["ports"])
         self.assertIn("18081:18081", services["auth-proxy"]["ports"])
         self.assertNotIn("ports", services["scheduler"])
+
+    def test_egress_proxy_has_no_published_ports(self) -> None:
+        """egress-proxy is only reachable from the internal network — it
+        must never be published on the host (ADR-025)."""
+        self.assertNotIn("ports", self.compose["services"]["egress-proxy"])
+
+    def test_internal_network_is_docker_internal(self) -> None:
+        networks = self.compose.get("networks") or {}
+        self.assertIn("internal", networks)
+        internal = networks["internal"]
+        self.assertTrue(internal.get("internal"), internal)
+        # A stable, explicit network name so RUNNER_NETWORK (used by the
+        # scheduler to attach sibling agent-runner containers) does not
+        # depend on Compose's project-name-derived default.
+        self.assertEqual(internal.get("name"), "7mimi-internal")
+
+    def test_egress_network_is_not_internal(self) -> None:
+        networks = self.compose.get("networks") or {}
+        self.assertIn("egress", networks)
+        egress = networks["egress"] or {}
+        self.assertFalse(egress.get("internal"))
+
+    def test_proxies_attach_to_both_networks(self) -> None:
+        services = self.compose["services"]
+        for name in ("claude-proxy", "auth-proxy", "egress-proxy"):
+            self.assertEqual(set(services[name]["networks"]), {"internal", "egress"})
+
+    def test_scheduler_attaches_to_internal_network_only(self) -> None:
+        scheduler = self.compose["services"]["scheduler"]
+        self.assertEqual(scheduler["networks"], ["internal"])
 
     def test_scheduler_mounts_docker_socket(self) -> None:
         volumes = self.compose["services"]["scheduler"]["volumes"]
@@ -100,7 +135,7 @@ class ComposeConfigTest(unittest.TestCase):
         """Every environment value must be an ${VAR} reference, a plain
         literal endpoint URL (http://host.docker.internal:...), or empty —
         never a literal secret string."""
-        allowed_literal_prefixes = ("http://", "cp_sess_dev", "")
+        allowed_literal_prefixes = ("http://", "cp_sess_dev", "7mimi-internal", "")
         services = self.compose["services"]
         for name, svc in services.items():
             env = svc.get("environment")
@@ -121,9 +156,27 @@ class ComposeConfigTest(unittest.TestCase):
 
     def test_scheduler_depends_on_both_proxies_healthy(self) -> None:
         depends_on = self.compose["services"]["scheduler"]["depends_on"]
-        self.assertEqual(set(depends_on.keys()), {"claude-proxy", "auth-proxy"})
+        self.assertEqual(set(depends_on.keys()), {"claude-proxy", "auth-proxy", "egress-proxy"})
         for dep in depends_on.values():
             self.assertEqual(dep["condition"], "service_healthy")
+
+    def test_scheduler_has_runner_network_and_egress_proxy_env(self) -> None:
+        scheduler_env = self.compose["services"]["scheduler"]["environment"]
+        self.assertEqual(scheduler_env["RUNNER_NETWORK"], "7mimi-internal")
+        self.assertEqual(scheduler_env["RUNNER_EGRESS_PROXY"], "http://egress-proxy:18082")
+        # Proxy URLs used by orchestration code running inside the scheduler
+        # container (both runner-facing and its own clone-back check) must
+        # use service-name addressing now that scheduler has no
+        # host.docker.internal route (internal network has no extra_hosts).
+        self.assertEqual(scheduler_env["CLAUDE_PROXY_URL"], "http://claude-proxy:18080")
+        self.assertEqual(scheduler_env["GIT_PROXY_URL"], "http://auth-proxy:18081")
+        self.assertEqual(scheduler_env["GIT_PROXY_URL_HOST"], "http://auth-proxy:18081")
+        self.assertEqual(scheduler_env["X_MCP_URL"], "http://auth-proxy:18081")
+
+    def test_scheduler_has_no_extra_hosts(self) -> None:
+        """host.docker.internal is unreachable/unnecessary once the
+        scheduler is service-name-addressed on the internal network."""
+        self.assertNotIn("extra_hosts", self.compose["services"]["scheduler"])
 
     def test_github_app_pem_mounted_read_only(self) -> None:
         volumes = self.compose["services"]["auth-proxy"]["volumes"]

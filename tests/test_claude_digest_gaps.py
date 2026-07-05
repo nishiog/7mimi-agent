@@ -296,6 +296,7 @@ class PromptDoesNotLeakSecretsTest(unittest.TestCase):
             prompt = build_digest_prompt(
                 notes_repo="7milch/ai-it-research-notes",
                 target_relative_path="daily/2026/07/2026-07-05.md",
+                git_proxy_url="http://auth-proxy:18081",
             )
         for value in secret_env.values():
             self.assertNotIn(value, prompt)

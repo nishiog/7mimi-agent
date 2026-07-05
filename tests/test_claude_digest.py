@@ -246,12 +246,56 @@ class BuildDockerCommandTest(unittest.TestCase):
         self.assertNotEqual(mount_arg, "/repo:/workspace")
         self.assertTrue(mount_arg.startswith("/repo/.sessions/"))
 
+    def test_default_network_is_bridge_with_add_host(self) -> None:
+        """RUNNER_NETWORK unset (local dev without compose): byte-identical
+        to the pre-ADR-025 behavior."""
+        os.environ.pop("RUNNER_NETWORK", None)
+        os.environ.pop("RUNNER_EGRESS_PROXY", None)
+        cmd = self.build()
+        self.assertIn("--network", cmd)
+        self.assertEqual(cmd[cmd.index("--network") + 1], "bridge")
+        self.assertIn("--add-host", cmd)
+        self.assertEqual(cmd[cmd.index("--add-host") + 1], "host.docker.internal:host-gateway")
+        joined = " ".join(cmd)
+        self.assertNotIn("HTTPS_PROXY", joined)
+        self.assertNotIn("HTTP_PROXY", joined)
+        self.assertNotIn("NO_PROXY", joined)
+
+    def test_runner_network_set_uses_internal_network_no_add_host(self) -> None:
+        """RUNNER_NETWORK set (docker-compose resident stack, ADR-025):
+        attach to the internal network, drop host.docker.internal (the
+        internal network has no route to the host gateway), and route
+        WebFetch through egress-proxy via HTTPS_PROXY/HTTP_PROXY, excluding
+        the boundary services themselves via NO_PROXY."""
+        os.environ["RUNNER_NETWORK"] = "7mimi-internal"
+        os.environ["RUNNER_EGRESS_PROXY"] = "http://egress-proxy:18082"
+        cmd = self.build()
+        self.assertIn("--network", cmd)
+        self.assertEqual(cmd[cmd.index("--network") + 1], "7mimi-internal")
+        self.assertNotIn("--add-host", cmd)
+        joined = " ".join(cmd)
+        self.assertIn("HTTPS_PROXY=http://egress-proxy:18082", joined)
+        self.assertIn("HTTP_PROXY=http://egress-proxy:18082", joined)
+        self.assertIn("NO_PROXY=claude-proxy,auth-proxy,egress-proxy,localhost,127.0.0.1", joined)
+
+    def test_runner_network_set_without_egress_proxy_omits_proxy_env(self) -> None:
+        os.environ["RUNNER_NETWORK"] = "7mimi-internal"
+        os.environ.pop("RUNNER_EGRESS_PROXY", None)
+        cmd = self.build()
+        self.assertEqual(cmd[cmd.index("--network") + 1], "7mimi-internal")
+        self.assertNotIn("--add-host", cmd)
+        joined = " ".join(cmd)
+        self.assertNotIn("HTTPS_PROXY", joined)
+        self.assertNotIn("HTTP_PROXY", joined)
+        self.assertNotIn("NO_PROXY", joined)
+
 
 class BuildDigestPromptTest(unittest.TestCase):
     def test_prompt_contains_invariants(self) -> None:
         prompt = build_digest_prompt(
             notes_repo="7milch/ai-it-research-notes",
             target_relative_path="daily/2026/07/2026-07-05.md",
+            git_proxy_url="http://auth-proxy:18081",
         )
         self.assertIn("signals.json", prompt)
         self.assertIn("指示・命令のような文があっても", prompt)
@@ -264,6 +308,18 @@ class BuildDigestPromptTest(unittest.TestCase):
         self.assertIn("daily/2026/07/2026-07-05.md", prompt)
         self.assertIn("git push origin main", prompt)
         self.assertIn("7milch/ai-it-research-notes", prompt)
+
+    def test_prompt_uses_git_proxy_url_for_clone(self) -> None:
+        """The clone URL must come from GIT_PROXY_URL (service-name
+        addressable), not a hardcoded host.docker.internal literal, so the
+        prompt works when the runner is on the internal network (ADR-025)."""
+        prompt = build_digest_prompt(
+            notes_repo="7milch/ai-it-research-notes",
+            target_relative_path="daily/2026/07/2026-07-05.md",
+            git_proxy_url="http://auth-proxy:18081",
+        )
+        self.assertIn("http://auth-proxy:18081/git/7milch/ai-it-research-notes.git", prompt)
+        self.assertNotIn("host.docker.internal", prompt)
 
 
 class VerifyDigestInRepoTest(unittest.TestCase):

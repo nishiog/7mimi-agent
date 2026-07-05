@@ -69,6 +69,7 @@ Run Go tests:
 ```bash
 cd services/claude-proxy && go test ./...
 cd services/auth-proxy && go test ./...
+cd services/egress-proxy && go test ./...
 ```
 
 Build container images:
@@ -131,7 +132,9 @@ git -c http.http://127.0.0.1:18081/git/.extraheader="Authorization: Bearer $AUTH
 
 ## Resident stack (docker compose)
 
-`docker-compose.yml` (ADR-024) runs claude-proxy, auth-proxy, and the scheduler (`schedule run`) as long-lived, `restart: unless-stopped` sidecar services so the daily digest job (ADR-021/022) runs without a human starting anything.
+`docker-compose.yml` (ADR-024) runs claude-proxy, auth-proxy, egress-proxy, and the scheduler (`schedule run`) as long-lived, `restart: unless-stopped` sidecar services so the daily digest job (ADR-021/022) runs without a human starting anything.
+
+`egress-proxy` (ADR-025) enforces network-layer egress control: the scheduler and any agent-runner containers it launches attach only to the Docker-internal `7mimi-internal` network, so their only paths out are claude-proxy, auth-proxy, and egress-proxy. egress-proxy is a small self-built Go forward proxy (CONNECT tunneling for HTTPS, absolute-URI forwarding for plain HTTP) used for WebFetch: it resolves each destination hostname and denies RFC1918/loopback/link-local/unique-local IPs, non-80/443 ports, and `api.anthropic.com` (which must go through claude-proxy instead), dialing the validated IP directly to avoid DNS-rebinding TOCTOU.
 
 ```bash
 cp .env.example .env
@@ -152,6 +155,6 @@ docker compose logs -f scheduler
 Notes:
 
 - The scheduler container mounts the repository at the *same absolute path* on host and container (`REPO_ROOT`, defaulting to `$PWD`) and mounts `/var/run/docker.sock`, so the `docker run -v <path>` commands it issues for agent-runner containers resolve correctly against the host Docker daemon (not the scheduler container's own filesystem).
-- claude-proxy and auth-proxy publish `18080`/`18081` on the host; the scheduler and any agent-runner containers reach them via `host.docker.internal`.
-- These ports are bound on all interfaces (not just loopback), since sibling runner containers reach them via the host-gateway address; the only defense against LAN access is the session Bearer token, so on untrusted networks block `18080`/`18081` with the host firewall.
+- claude-proxy and auth-proxy publish `18080`/`18081` on the host for local/dev use; the scheduler and agent-runner containers reach all three proxies by service name (`claude-proxy`, `auth-proxy`, `egress-proxy`) over the internal Docker network `7mimi-internal`, not `host.docker.internal`.
+- These host ports are bound on all interfaces (not just loopback) for local dev access; the only defense against LAN access is the session Bearer token, so on untrusted networks block `18080`/`18081` with the host firewall.
 - Stop the stack with `docker compose down`; it does not remove `.data/`, `.sessions/`, or agent-runner images.

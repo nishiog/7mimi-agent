@@ -192,7 +192,7 @@ class ClaudeDigestResult:
     commit_sha: str | None = None
 
 
-def build_digest_prompt(*, notes_repo: str, target_relative_path: str) -> str:
+def build_digest_prompt(*, notes_repo: str, target_relative_path: str, git_proxy_url: str) -> str:
     return f"""あなたは AI/IT topic runner です。以下の手順で daily digest を作成し、公開してください。
 
 # 入力
@@ -208,7 +208,7 @@ def build_digest_prompt(*, notes_repo: str, target_relative_path: str) -> str:
    - 投資助言を書かないこと。
    - ポスト本文の大量転載をしないこと(要約・引用は短く)。
 4. 以下の手順で公開してください:
-   - `git clone http://host.docker.internal:18081/git/{notes_repo}.git notes`
+   - `git clone {git_proxy_url.rstrip('/')}/git/{notes_repo}.git notes`
    - `notes/{target_relative_path}` に digest を保存(このパスは orchestrator が確定させた対象日付のパスです。別の日付のパスを使わないでください)
    - `git add` して `git commit -m "docs: daily AI/IT digest <date> (7mimi-agent autonomous)"`
    - `git push origin main`
@@ -252,6 +252,31 @@ def build_docker_command(
     }
     env.update(build_git_relay_env(proxy_url=git_proxy_url, session_token=git_proxy_session_token))
 
+    # ADR-025: when the scheduler runs inside the docker-compose resident
+    # stack, RUNNER_NETWORK points at the Docker-internal network so the
+    # container has no default route to the outside world -- its only
+    # egress path is egress-proxy (HTTPS_PROXY/HTTP_PROXY below). WebFetch
+    # goes through the forward proxy; proxy/relay traffic itself (to
+    # claude-proxy/auth-proxy/egress-proxy, addressed by service name) is
+    # excluded via NO_PROXY. When RUNNER_NETWORK is unset (local dev without
+    # compose), behavior is unchanged: bridge network + host.docker.internal.
+    runner_network = os.environ.get("RUNNER_NETWORK")
+    network_args: list[str]
+    if runner_network:
+        network_args = ["--network", runner_network]
+        egress_proxy_url = os.environ.get("RUNNER_EGRESS_PROXY")
+        if egress_proxy_url:
+            env["HTTPS_PROXY"] = egress_proxy_url
+            env["HTTP_PROXY"] = egress_proxy_url
+            env["NO_PROXY"] = "claude-proxy,auth-proxy,egress-proxy,localhost,127.0.0.1"
+    else:
+        network_args = [
+            "--network",
+            options.network,
+            "--add-host",
+            "host.docker.internal:host-gateway",
+        ]
+
     env_args: list[str] = []
     for key, value in env.items():
         env_args.extend(["-e", f"{key}={value}"])
@@ -262,10 +287,7 @@ def build_docker_command(
         "--rm",
         "--name",
         f"7mimi-claude-digest-{session_id}",
-        "--network",
-        options.network,
-        "--add-host",
-        "host.docker.internal:host-gateway",
+        *network_args,
         "--memory",
         options.memory,
         "--pids-limit",
@@ -388,7 +410,14 @@ def run_claude_digest(
     date = now_jst().date()
     relative_path = f"daily/{date:%Y}/{date:%m}/{date.isoformat()}.md"
 
-    prompt = build_digest_prompt(notes_repo=options.notes_repo, target_relative_path=relative_path)
+    git_proxy_url_for_prompt = os.environ.get("GIT_PROXY_URL")
+    if not git_proxy_url_for_prompt:
+        raise ValueError("GIT_PROXY_URL is required for claude-digest")
+    prompt = build_digest_prompt(
+        notes_repo=options.notes_repo,
+        target_relative_path=relative_path,
+        git_proxy_url=git_proxy_url_for_prompt,
+    )
 
     cmd = build_docker_command(
         workspace=workspace,

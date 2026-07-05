@@ -145,3 +145,9 @@ Reason: credential 保有者を Go 境界サービス(auth-proxy: tool 認可 + 
 Decision: claude-proxy・auth-proxy・scheduler(`schedule run`)の常駐は単一の `docker-compose.yml` で管理する(restart: unless-stopped、healthcheck 付き)。scheduler コンテナは `/var/run/docker.sock` をマウントし、agent-runner を sibling コンテナとしてホストの Docker daemon で起動する。このためリポジトリはホストと同一絶対パスで scheduler コンテナにマウントし、セッション workspace の `-v` パス整合を保つ。secrets は gitignored な `.env`(env_file)と read-only の pem マウントで注入し、イメージには焼き込まない。proxy 類は 18080/18081 をホストに公開し、runner/scheduler からは `host.docker.internal` で到達する。proxy の 18080/18081 は全インターフェースに公開する(sibling runner が host-gateway 経由で到達するため loopback bind は不可)。LAN 内の第三者アクセスはセッション Bearer のみで防御されるため、信頼できないネットワークではホスト側 firewall で遮断する運用とする。
 
 Reason: 毎朝の自律 digest(ADR-021/022)を人手なしで回すため、プロセス管理を Docker の restart/healthcheck に委ねる。docker.sock マウントは実質ホスト root 相当の権限だが、scheduler イメージは自前ビルド・自前コードのみで外部入力を実行しないため、launchd 複数管理より単純さを優先する。egress の DNAT 強制(#17)は本構成の上に重ねる。
+
+### ADR-025: agent-runner の egress は internal ネットワーク + egress-proxy で強制する
+
+Decision: compose 環境では agent-runner を `internal: true` の Docker ネットワーク(7mimi-internal)のみに接続し、外部への直接到達を遮断する。runner から見える経路は claude-proxy(LLM)、auth-proxy(tool 認可・git relay・x-mcp)、egress-proxy(WebFetch 用 forward proxy)の 3 つに限定する。egress-proxy は自前 Go 実装の CONNECT/HTTP forward proxy で、解決済み IP に対して RFC1918・loopback・link-local・ULA を拒否し(検証済み IP へ直接 dial して DNS rebinding を防ぐ)、443/80 以外のポートと `api.anthropic.com` への直行(claude-proxy 迂回)を拒否し、metadata のみを監査ログに残す。`EGRESS_ALLOW_HOSTS` によるドメイン allowlist 化を後日の絞り込みとして残す。ローカル dev(compose なし)では従来の bridge + host.docker.internal 構成を維持する。
+
+Reason: ADR-021 で認識した「bridge egress 無制限」の残存リスクに対し、macOS Docker Desktop では iptables/DNAT を直接制御できないため、Mercari 方式(ネットワーク層強制)を Docker ネイティブの internal ネットワーク+単一出口 proxy に翻訳して実現する。egress-proxy を自前 Go 実装とするのは、第三者 proxy イメージの supply chain リスクを避け、既存の Go 境界サービス群と同じ監査・テスト規律に載せるため。WebFetch の一次情報確認は広範な公開 Web を必要とするため、MVP では public IP 宛 80/443 を許可しつつ、内部網・メタデータサービス・provider API 直行を機械的に遮断することを優先する。

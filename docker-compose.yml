@@ -1,12 +1,26 @@
 # Resident stack for the 7mimi-agent scheduler + security-boundary proxies
-# (Issue #16 / ADR-024). All three services run continuously on the host;
-# agent-runner containers are launched on demand as sibling containers by the
-# scheduler via the mounted host Docker socket, not by this compose file.
+# (Issue #16 / ADR-024) plus egress enforcement (Issue #17 / ADR-025).
+# All four services run continuously on the host; agent-runner containers
+# are launched on demand as sibling containers by the scheduler via the
+# mounted host Docker socket, not by this compose file.
+#
+# Networks: `internal` is Docker-internal (no default route to the outside
+# world) and is where agent-runner containers are attached by the scheduler
+# (RUNNER_NETWORK below); the only paths out of it are claude-proxy,
+# auth-proxy, and egress-proxy, all of which also attach to the normal
+# bridge network `egress` for their own upstream calls.
+
+networks:
+  internal:
+    name: 7mimi-internal
+    internal: true
+  egress: {}
 
 services:
   claude-proxy:
     build:
       context: services/claude-proxy
+    networks: [internal, egress]
     ports:
       - "18080:18080"
     environment:
@@ -21,6 +35,7 @@ services:
   auth-proxy:
     build:
       context: services/auth-proxy
+    networks: [internal, egress]
     ports:
       - "18081:18081"
     environment:
@@ -38,12 +53,26 @@ services:
       timeout: 3s
       retries: 5
 
+  egress-proxy:
+    build:
+      context: services/egress-proxy
+    networks: [internal, egress]
+    environment:
+      EGRESS_DENY_HOSTS: ${EGRESS_DENY_HOSTS:-api.anthropic.com}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/egress-proxy", "-healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   scheduler:
     build:
       context: .
       dockerfile: Dockerfile.scheduler
     command: ["python", "-m", "shichimimi_agent", "schedule", "run"]
     restart: unless-stopped
+    networks: [internal]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # Mounted at the IDENTICAL absolute host path: sibling agent-runner
@@ -52,18 +81,28 @@ services:
       # the host daemon (not this container's filesystem).
       - ${REPO_ROOT:-${PWD}}:${REPO_ROOT:-${PWD}}
     working_dir: ${REPO_ROOT:-${PWD}}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     environment:
       PYTHONPATH: ${REPO_ROOT:-${PWD}}/src
-      X_MCP_URL: http://host.docker.internal:18081
+      X_MCP_URL: http://auth-proxy:18081
       X_MCP_SESSION_TOKEN: ${AUTH_PROXY_SESSION_TOKEN:?AUTH_PROXY_SESSION_TOKEN is required}
-      CLAUDE_PROXY_URL: http://host.docker.internal:18080
+      CLAUDE_PROXY_URL: http://claude-proxy:18080
       CLAUDE_PROXY_SESSION_TOKEN: ${CLAUDE_PROXY_DEV_TOKEN:-cp_sess_dev}
-      GIT_PROXY_URL: http://host.docker.internal:18081
+      GIT_PROXY_URL: http://auth-proxy:18081
       GIT_PROXY_SESSION_TOKEN: ${AUTH_PROXY_SESSION_TOKEN:?AUTH_PROXY_SESSION_TOKEN is required}
+      # The scheduler container itself runs _verify_published's clone-back
+      # check, so (unlike the pre-egress-enforcement layout) it reaches
+      # auth-proxy by service name directly -- no host-side override needed.
+      GIT_PROXY_URL_HOST: http://auth-proxy:18081
+      # Runner-facing wiring: the scheduler passes these through when it
+      # launches agent-runner as a sibling container (RunnerBackend), so the
+      # runner attaches to the same internal network and egress-proxy is its
+      # only path to the public internet.
+      RUNNER_NETWORK: 7mimi-internal
+      RUNNER_EGRESS_PROXY: http://egress-proxy:18082
     depends_on:
       claude-proxy:
         condition: service_healthy
       auth-proxy:
+        condition: service_healthy
+      egress-proxy:
         condition: service_healthy
