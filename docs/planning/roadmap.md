@@ -87,12 +87,12 @@
 
 ### Phase 3: Scheduled autonomy
 
-- [ ] cron scheduler
+- [x] cron scheduler
 - [ ] x-signal-collector job
 - [ ] stock-signal-fact-check job
 - [ ] daily-digest-writer job
-- [ ] concurrency policy
-- [ ] retry / timeout
+- [x] concurrency policy
+- [x] retry / timeout
 
 ### Phase 4: Containerized runner
 
