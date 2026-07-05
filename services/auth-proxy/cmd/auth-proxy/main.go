@@ -10,6 +10,8 @@ import (
 	"github.com/7milch/7mimi-agent/services/auth-proxy/internal/audit"
 	"github.com/7milch/7mimi-agent/services/auth-proxy/internal/githubapp"
 	"github.com/7milch/7mimi-agent/services/auth-proxy/internal/gitrelay"
+	"github.com/7milch/7mimi-agent/services/auth-proxy/internal/jqmcp"
+	"github.com/7milch/7mimi-agent/services/auth-proxy/internal/jquants"
 	"github.com/7milch/7mimi-agent/services/auth-proxy/internal/policy"
 	"github.com/7milch/7mimi-agent/services/auth-proxy/internal/slacknotify"
 	"github.com/7milch/7mimi-agent/services/auth-proxy/internal/tools"
@@ -93,23 +95,37 @@ func mountGitRelay(mux *http.ServeMux, logger *audit.Logger) {
 	mux.Handle("/git/", relay.Routes())
 }
 
-// mountXMCP mounts the x-mcp-readonly MCP endpoint (ADR-023) only when both
-// X_BEARER_TOKEN (the X API credential) and AUTH_PROXY_SESSION_TOKEN (the
-// same session Bearer that protects gitrelay) are configured; otherwise it
-// logs which one is missing and leaves /mcp unmounted.
+// mountXMCP mounts the /mcp endpoint (ADR-023, ADR-027) when
+// AUTH_PROXY_SESSION_TOKEN is configured and at least one of X_BEARER_TOKEN
+// (x-mcp-readonly tools) or JQUANTS_REFRESH_TOKEN (jq.* tools, ADR-027) is
+// available. The tools/list output reflects whichever credentials are
+// actually configured: X only, J-Quants only, or both.
 func mountXMCP(mux *http.ServeMux, logger *audit.Logger) {
-	xBearerToken := os.Getenv("X_BEARER_TOKEN")
 	sessionToken := os.Getenv("AUTH_PROXY_SESSION_TOKEN")
-	if xBearerToken == "" {
-		log.Printf("x-mcp disabled: X_BEARER_TOKEN not set")
-		return
-	}
 	if sessionToken == "" {
 		log.Printf("x-mcp disabled: AUTH_PROXY_SESSION_TOKEN not set")
 		return
 	}
 
-	handler, err := xmcp.NewHandler(sessionToken, logger)
+	includeXTools := os.Getenv("X_BEARER_TOKEN") != ""
+	if !includeXTools {
+		log.Printf("x-mcp X tools disabled: X_BEARER_TOKEN not set")
+	}
+
+	var extras []xmcp.ExtraTool
+	jqTokens, err := jquants.NewTokenSourceFromEnv()
+	if err != nil {
+		log.Printf("jquants tools disabled: JQUANTS_REFRESH_TOKEN not set")
+	} else {
+		extras = jqmcp.Tools(jqTokens)
+	}
+
+	if !includeXTools && len(extras) == 0 {
+		log.Printf("x-mcp disabled: neither X_BEARER_TOKEN nor JQUANTS_REFRESH_TOKEN configured")
+		return
+	}
+
+	handler, err := xmcp.NewHandlerWithOptions(sessionToken, logger, includeXTools, extras...)
 	if err != nil {
 		log.Printf("x-mcp disabled: handler construction failed")
 		return

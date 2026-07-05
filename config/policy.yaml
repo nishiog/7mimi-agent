@@ -263,13 +263,21 @@ role_tool_policy:
       - jquants.get_financial_statements
       - jquants.get_dividends
       - jquants.get_earnings_calendar
+      - jq.get_listed_info
+      - jq.get_daily_quotes
+      - jq.get_statements
+      - x.search_posts_recent
       - web.fetch_url
       - web.extract_article
       - document.read
       - queue.get_candidate
       - queue.update_status
     deny:
-      - x.*
+      - x.create_post
+      - x.like_post
+      - x.repost
+      - x.follow_user
+      - x.send_dm
       - document.write_markdown
       - trading.*
 

@@ -4,12 +4,14 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/7milch/7mimi-agent/services/auth-proxy/internal/audit"
@@ -95,5 +97,111 @@ func TestMountGitRelayEnabledWithSessionTokenAndCreds(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401 (relay should be mounted and reachable, but reject missing auth)", rec.Code)
+	}
+}
+
+// toolNamesFromMCP calls tools/list against the mounted /mcp handler and
+// returns the tool names present, using the given session token.
+func toolNamesFromMCP(t *testing.T, mux *http.ServeMux, sessionToken string) []string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`))
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("tools/list status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode tools/list response: %v", err)
+	}
+	names := make([]string, 0, len(resp.Result.Tools))
+	for _, tool := range resp.Result.Tools {
+		names = append(names, tool.Name)
+	}
+	return names
+}
+
+func containsName(names []string, want string) bool {
+	for _, n := range names {
+		if n == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestMountXMCPDisabledWithoutAnyCredential(t *testing.T) {
+	t.Setenv("AUTH_PROXY_SESSION_TOKEN", "sess-tok")
+	t.Setenv("X_BEARER_TOKEN", "")
+	t.Setenv("JQUANTS_REFRESH_TOKEN", "")
+
+	mux := http.NewServeMux()
+	mountXMCP(mux, audit.NewLogger(io.Discard))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{}`))
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (mcp must not be mounted without any credential)", rec.Code)
+	}
+}
+
+func TestMountXMCPXOnly(t *testing.T) {
+	t.Setenv("AUTH_PROXY_SESSION_TOKEN", "sess-tok")
+	t.Setenv("X_BEARER_TOKEN", "x-tok")
+	t.Setenv("JQUANTS_REFRESH_TOKEN", "")
+
+	mux := http.NewServeMux()
+	mountXMCP(mux, audit.NewLogger(io.Discard))
+
+	names := toolNamesFromMCP(t, mux, "sess-tok")
+	if !containsName(names, "x.search_posts_recent") {
+		t.Errorf("expected x tools present, got %v", names)
+	}
+	if containsName(names, "jq.get_listed_info") {
+		t.Errorf("did not expect jq tools present, got %v", names)
+	}
+}
+
+func TestMountXMCPJQuantsOnly(t *testing.T) {
+	t.Setenv("AUTH_PROXY_SESSION_TOKEN", "sess-tok")
+	t.Setenv("X_BEARER_TOKEN", "")
+	t.Setenv("JQUANTS_REFRESH_TOKEN", "jq-tok")
+
+	mux := http.NewServeMux()
+	mountXMCP(mux, audit.NewLogger(io.Discard))
+
+	names := toolNamesFromMCP(t, mux, "sess-tok")
+	if containsName(names, "x.search_posts_recent") {
+		t.Errorf("did not expect x tools present, got %v", names)
+	}
+	for _, want := range []string{"jq.get_listed_info", "jq.get_daily_quotes", "jq.get_statements"} {
+		if !containsName(names, want) {
+			t.Errorf("expected %s present, got %v", want, names)
+		}
+	}
+}
+
+func TestMountXMCPBothConfigured(t *testing.T) {
+	t.Setenv("AUTH_PROXY_SESSION_TOKEN", "sess-tok")
+	t.Setenv("X_BEARER_TOKEN", "x-tok")
+	t.Setenv("JQUANTS_REFRESH_TOKEN", "jq-tok")
+
+	mux := http.NewServeMux()
+	mountXMCP(mux, audit.NewLogger(io.Discard))
+
+	names := toolNamesFromMCP(t, mux, "sess-tok")
+	if !containsName(names, "x.search_posts_recent") {
+		t.Errorf("expected x tools present, got %v", names)
+	}
+	if !containsName(names, "jq.get_listed_info") {
+		t.Errorf("expected jq tools present, got %v", names)
 	}
 }

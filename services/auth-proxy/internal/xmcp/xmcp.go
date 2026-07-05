@@ -149,28 +149,83 @@ var toolNames = func() map[string]bool {
 	return names
 }()
 
-// Handler serves the x-mcp-readonly JSON-RPC endpoint.
+// ToolHandler executes an extra (non-X) tool call and returns its result.
+// Implementations must never include credentials in the returned text.
+type ToolHandler func(arguments map[string]any) ToolResult
+
+// ExtraTool pairs a tool definition with its handler, allowing other
+// credential holders (e.g. J-Quants, ADR-027) to register additional tools
+// on the same /mcp endpoint without xmcp owning their credentials or HTTP
+// logic. The server's tools/list output and tools/call routing simply
+// reflect whichever extras were configured at construction.
+type ExtraTool struct {
+	Tool    Tool
+	Handler ToolHandler
+}
+
+// Handler serves the x-mcp-readonly JSON-RPC endpoint, plus any extra tools
+// registered at construction time (ADR-027).
 type Handler struct {
-	sessionToken string
-	logger       *audit.Logger
-	httpClient   *http.Client
+	sessionToken  string
+	logger        *audit.Logger
+	httpClient    *http.Client
+	includeXTools bool
+	extraTools    []Tool
+	extraHandlers map[string]ToolHandler
 }
 
 // NewHandler builds an xmcp Handler. sessionToken must be non-empty
 // (fail-closed, same convention as gitrelay.NewHandler): every request to
 // /mcp must present it as a Bearer token, protecting the same listener as
 // gitrelay consistently. logger may be nil (audit becomes a no-op).
-func NewHandler(sessionToken string, logger *audit.Logger) (*Handler, error) {
+//
+// By default the handler serves the built-in X tools. Callers that only
+// want extra tools (e.g. J-Quants configured without X_BEARER_TOKEN) should
+// use NewHandlerWithOptions with includeXTools=false so tools/list reflects
+// what is actually configured.
+func NewHandler(sessionToken string, logger *audit.Logger, extras ...ExtraTool) (*Handler, error) {
+	return NewHandlerWithOptions(sessionToken, logger, true, extras...)
+}
+
+// NewHandlerWithOptions builds an xmcp Handler with control over whether the
+// built-in X tools are included in tools/list and dispatch.
+func NewHandlerWithOptions(sessionToken string, logger *audit.Logger, includeXTools bool, extras ...ExtraTool) (*Handler, error) {
 	if sessionToken == "" {
 		return nil, errors.New("xmcp: session token must not be empty")
 	}
-	return &Handler{
-		sessionToken: sessionToken,
-		logger:       logger,
+	h := &Handler{
+		sessionToken:  sessionToken,
+		logger:        logger,
+		includeXTools: includeXTools,
 		httpClient: &http.Client{
 			Timeout: 20 * time.Second,
 		},
-	}, nil
+		extraHandlers: make(map[string]ToolHandler, len(extras)),
+	}
+	for _, extra := range extras {
+		h.extraTools = append(h.extraTools, extra.Tool)
+		h.extraHandlers[extra.Tool.Name] = extra.Handler
+	}
+	return h, nil
+}
+
+// allTools returns the tool list this handler exposes via tools/list,
+// reflecting includeXTools and any registered extras.
+func (h *Handler) allTools() []Tool {
+	result := make([]Tool, 0, len(tools)+len(h.extraTools))
+	if h.includeXTools {
+		result = append(result, tools...)
+	}
+	result = append(result, h.extraTools...)
+	return result
+}
+
+func (h *Handler) hasTool(name string) bool {
+	if h.includeXTools && toolNames[name] {
+		return true
+	}
+	_, ok := h.extraHandlers[name]
+	return ok
 }
 
 // Routes registers the handler's HTTP routes on a mux.
@@ -261,7 +316,7 @@ func (h *Handler) handlePost(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	case "tools/list":
-		h.writeJSON(w, http.StatusOK, resultResponse(req.ID, map[string]any{"tools": tools}))
+		h.writeJSON(w, http.StatusOK, resultResponse(req.ID, map[string]any{"tools": h.allTools()}))
 		return
 	case "tools/call":
 		h.handleToolsCall(w, req, start)
@@ -286,7 +341,7 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, req jsonrpcRequest, sta
 		params.Arguments = map[string]any{}
 	}
 
-	if !toolNames[params.Name] {
+	if !h.hasTool(params.Name) {
 		h.writeJSON(w, http.StatusOK, errorResponse(req.ID, jsonrpcInvalidParams, "unknown or unsupported tool: "+params.Name))
 		return
 	}
@@ -296,13 +351,21 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, req jsonrpcRequest, sta
 	h.writeJSON(w, http.StatusOK, resultResponse(req.ID, result.toResultMap()))
 }
 
-type toolResult struct {
+type ToolResult struct {
 	text           string
 	isError        bool
 	upstreamStatus int
 }
 
-func (t toolResult) toResultMap() map[string]any {
+// Text returns the result's text payload, for use by tests of extra tool
+// handlers registered from other packages.
+func (t ToolResult) Text() string { return t.text }
+
+// IsError reports whether this result represents a tool call failure, for
+// use by tests of extra tool handlers registered from other packages.
+func (t ToolResult) IsError() bool { return t.isError }
+
+func (t ToolResult) toResultMap() map[string]any {
 	m := map[string]any{
 		"content": []map[string]any{
 			{"type": "text", "text": t.text},
@@ -314,11 +377,29 @@ func (t toolResult) toResultMap() map[string]any {
 	return m
 }
 
-func errorTextResult(text string) toolResult {
-	return toolResult{text: text, isError: true}
+func errorTextResult(text string) ToolResult {
+	return ToolResult{text: text, isError: true}
 }
 
-func (h *Handler) callTool(name string, arguments map[string]any) toolResult {
+// NewTextResult builds a successful ToolResult carrying a text payload
+// (typically JSON), for use by extra tool handlers registered from other
+// packages (ADR-027).
+func NewTextResult(text string, upstreamStatus int) ToolResult {
+	return ToolResult{text: text, upstreamStatus: upstreamStatus}
+}
+
+// NewErrorResult builds a failing ToolResult carrying only a non-sensitive
+// error message and upstream status, for use by extra tool handlers
+// registered from other packages. Callers must never pass credentials.
+func NewErrorResult(text string, upstreamStatus int) ToolResult {
+	return ToolResult{text: text, isError: true, upstreamStatus: upstreamStatus}
+}
+
+func (h *Handler) callTool(name string, arguments map[string]any) ToolResult {
+	if handler, ok := h.extraHandlers[name]; ok {
+		return handler(arguments)
+	}
+
 	token := os.Getenv("X_BEARER_TOKEN")
 	if token == "" {
 		return errorTextResult("X_BEARER_TOKEN is not configured")
@@ -380,12 +461,12 @@ func (h *Handler) callTool(name string, arguments map[string]any) toolResult {
 	}
 }
 
-func jsonResult(v map[string]any, upstreamStatus int) toolResult {
+func jsonResult(v map[string]any, upstreamStatus int) ToolResult {
 	b, err := json.Marshal(v)
 	if err != nil {
-		return toolResult{text: "internal error", isError: true, upstreamStatus: upstreamStatus}
+		return ToolResult{text: "internal error", isError: true, upstreamStatus: upstreamStatus}
 	}
-	return toolResult{text: string(b), upstreamStatus: upstreamStatus}
+	return ToolResult{text: string(b), upstreamStatus: upstreamStatus}
 }
 
 type xAPIError struct {
@@ -397,14 +478,14 @@ func (e *xAPIError) Error() string {
 	return fmt.Sprintf("X API error %d: %s", e.status, e.title)
 }
 
-func xAPIErrorResult(err error, status int) toolResult {
+func xAPIErrorResult(err error, status int) ToolResult {
 	var apiErr *xAPIError
 	if e, ok := err.(*xAPIError); ok {
 		apiErr = e
 	} else {
 		apiErr = &xAPIError{status: status, title: err.Error()}
 	}
-	return toolResult{
+	return ToolResult{
 		text:           fmt.Sprintf("X API error (status=%d): %s", apiErr.status, apiErr.title),
 		isError:        true,
 		upstreamStatus: apiErr.status,

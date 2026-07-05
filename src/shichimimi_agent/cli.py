@@ -393,8 +393,38 @@ def cmd_invest_digest(args: argparse.Namespace) -> int:
 
 
 def cmd_research_stock(args: argparse.Namespace) -> int:
-    print("stock research runner is not implemented yet; planned for Phase D5")
-    print(json.dumps({"ticker": args.ticker, "dry_run": args.dry_run, "status": "not_implemented"}, ensure_ascii=False, indent=2))
+    """Phase 1: `research stock <code>` -- deterministic J-Quants memo (ADR-027)."""
+    from shichimimi_agent.runner.stock_research import ROLE, run_stock_research
+
+    try:
+        config = _load_validated_config(args.root)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    migrate(default_db_path(config.root))
+    repository = Repository.for_root(config.root)
+
+    session_id = repository.create_session(source="research-stock", role=ROLE, workspace_path="")
+    repository.update_session_status(session_id, "running")
+    task_id = repository.create_task(session_id=session_id, role=ROLE, input_data={"code": args.code})
+
+    try:
+        result = run_stock_research(
+            config=config,
+            repository=repository,
+            session_id=session_id,
+            task_id=task_id,
+            code=args.code,
+        )
+    except Exception as exc:
+        repository.finish_task(task_id, status="failed", error={"type": type(exc).__name__, "message": str(exc)})
+        repository.update_session_status(session_id, "failed")
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    repository.finish_task(task_id, status="succeeded", output={"path": str(result.path), "document_id": result.document_id})
+    repository.update_session_status(session_id, "stopped")
+    print(json.dumps({"code": result.code, "path": str(result.path), "document_id": result.document_id}, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -565,9 +595,10 @@ def build_parser() -> argparse.ArgumentParser:
     invest_digest.add_argument("--max-turns", type=int, default=40)
     invest_digest.set_defaults(func=cmd_invest_digest)
 
-    stock = sub.add_parser("research-stock")
-    stock.add_argument("ticker")
-    stock.add_argument("--dry-run", action="store_true", default=False)
+    research = sub.add_parser("research")
+    research_sub = research.add_subparsers(dest="research_command", required=True)
+    stock = research_sub.add_parser("stock")
+    stock.add_argument("code")
     stock.set_defaults(func=cmd_research_stock)
     return parser
 

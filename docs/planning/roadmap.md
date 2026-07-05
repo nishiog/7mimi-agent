@@ -65,16 +65,16 @@
 
 ### Phase 1: Local MVP
 
-- [ ] SQLite schema for research_queue / events
-- [ ] local orchestrator
-- [ ] role definitions
-- [ ] mock claude-proxy
-- [ ] mock auth-proxy
+- [x] SQLite schema for research_queue / events
+- [x] local orchestrator (cli run-job + LocalRunnerBackend)
+- [x] role definitions (config/roles.yaml)
+- [x] mock claude-proxy (実 Go 実装で代替、ADR-012)
+- [x] mock auth-proxy (実 Go 実装で代替、ADR-012)
 - [x] X MCP read-only connection test
-- [ ] J-Quants MCP connection test
-- [ ] manual command: `research stock 7011`
+- [x] J-Quants MCP connection test
+- [x] manual command: `research stock 7011`
 - [ ] manual command: `collect x ai-agent`
-- [ ] Markdown output generation
+- [x] Markdown output generation (daily digest)
 
 ### Phase 2: Policy and hooks
 
@@ -96,12 +96,12 @@
 
 ### Phase 4: Containerized runner
 
-- [ ] runner image
-- [ ] one request one container
-- [ ] session workspace
+- [x] runner image (Dockerfile.agent-runner)
+- [x] one request one container (ContainerRunnerBackend / claude-digest)
+- [x] session workspace (.sessions/<id>/workspace)
 - [ ] resource limits
-- [ ] network restrictions
-- [ ] API key separation by MCP container
+- [x] network restrictions (internal network + egress-proxy、ADR-025)
+- [x] API key separation by MCP container (auth-proxy へ集約、ADR-023)
 
 ### Phase 5: Persistent session runner
 
@@ -116,7 +116,7 @@
 - [ ] EDINET tool / MCP
 - [ ] IR page fetch and parsing
 - [ ] TDnet-like disclosure integration if available / needed
-- [ ] Slack / Discord notification
+- [x] Slack / Discord notification (Slack bot 通知、ADR-026)
 - [ ] GitHub issue / PR trigger
 
 ---
