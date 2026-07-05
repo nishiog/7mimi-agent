@@ -244,6 +244,7 @@ role_tool_policy:
       - queue.update_status
       - metrics.record_event
       - metrics.record_output
+      - claude.summarize_signals
     deny:
       - x.create_post
       - x.like_post

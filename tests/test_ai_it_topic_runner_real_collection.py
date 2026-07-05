@@ -6,10 +6,12 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from shichimimi_agent.config import load_config
 from shichimimi_agent.db import Repository, migrate
 from shichimimi_agent.mcp.client import McpHttpClient
+from shichimimi_agent.research.signal_summarizer import SignalSummary
 from shichimimi_agent.roles.ai_it_topic_runner import AiItTopicRunner
 from shichimimi_agent.security.policy_engine import PolicyEngine
 
@@ -241,6 +243,169 @@ class AiItTopicRunnerRealCollectionTest(unittest.TestCase):
         self.assertEqual(tool_name, "x.search_posts_recent")
         self.assertIn(decision, ("block", "deny"))
         self.assertEqual(success, 0)
+
+
+class FakeClaudeClient:
+    def __init__(self, session_id: str, role: str) -> None:
+        self.session_id = session_id
+        self.role = role
+
+
+class AiItTopicRunnerLlmSummaryTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.root = Path(__file__).resolve().parents[1]
+        self.config = load_config(self.root)
+        self._tmpdir = tempfile.TemporaryDirectory()
+        db_path = Path(self._tmpdir.name) / "app.sqlite"
+        migrate(db_path)
+        self.repository = Repository(db_path)
+        self.policy_engine = PolicyEngine(self.config.policy)
+        self._env_backup = dict(os.environ)
+
+    def tearDown(self) -> None:
+        self._tmpdir.cleanup()
+        os.environ.clear()
+        os.environ.update(self._env_backup)
+
+    def _job(self) -> dict[str, Any]:
+        return {
+            "role": "ai_it_topic_runner",
+            "inputs": {"query_set": "ai_it_watch"},
+            "output": {"repo": "nishiog/ai-it-research-notes"},
+        }
+
+    def _queries(self) -> list[str]:
+        query_set = (self.config.schedules.get("query_sets") or {}).get("ai_it_watch") or {}
+        return list(query_set.get("queries") or [])
+
+    def _fake_mcp_client(self) -> FakeMcpClient:
+        queries = self._queries()
+        posts_by_query = {
+            query: [
+                _post(f"{i}-high", f"https://x.com/alice/status/{i}high", "some observed text", ["https://example.com/e"], likes=10, reposts=1),
+            ]
+            for i, query in enumerate(queries[:3])
+        }
+        return FakeMcpClient("http://x-mcp.local", posts_by_query=posts_by_query)
+
+    def test_env_unset_llm_client_factory_never_called(self) -> None:
+        os.environ["X_MCP_URL"] = "http://x-mcp.local"
+        os.environ.pop("CLAUDE_PROXY_URL", None)
+        os.environ.pop("CLAUDE_PROXY_SESSION_TOKEN", None)
+        fake_mcp = self._fake_mcp_client()
+        factory_calls: list[tuple[str, str]] = []
+
+        def claude_client_factory(session_id: str, role: str) -> FakeClaudeClient:
+            factory_calls.append((session_id, role))
+            return FakeClaudeClient(session_id, role)
+
+        runner = AiItTopicRunner(
+            config=self.config,
+            repository=self.repository,
+            policy_engine=self.policy_engine,
+            mcp_client_factory=lambda base_url: fake_mcp,
+            claude_client_factory=claude_client_factory,
+        )
+        result = runner.run_daily_digest(session_id="sess_llm_off", task_id="task_llm_off", job=self._job(), dry_run=True)
+        self.assertEqual(result.status, "succeeded")
+        self.assertEqual(factory_calls, [])
+        content = Path(result.path).read_text(encoding="utf-8")
+        self.assertIn("(via X signal)", content)
+        self.assertNotIn("LLM要約", content)
+
+    def test_llm_summary_applied_to_digest_item(self) -> None:
+        os.environ["X_MCP_URL"] = "http://x-mcp.local"
+        os.environ["CLAUDE_PROXY_URL"] = "http://claude-proxy.local"
+        os.environ["CLAUDE_PROXY_SESSION_TOKEN"] = "token-abc"
+        fake_mcp = self._fake_mcp_client()
+
+        def claude_client_factory(session_id: str, role: str) -> FakeClaudeClient:
+            return FakeClaudeClient(session_id, role)
+
+        runner = AiItTopicRunner(
+            config=self.config,
+            repository=self.repository,
+            policy_engine=self.policy_engine,
+            mcp_client_factory=lambda base_url: fake_mcp,
+            claude_client_factory=claude_client_factory,
+        )
+        with mock.patch(
+            "shichimimi_agent.roles.ai_it_topic_runner.summarize_signals",
+            return_value=SignalSummary(what_happened="LLM summarized fact.", why_it_matters="LLM importance."),
+        ) as summarize_mock:
+            result = runner.run_daily_digest(session_id="sess_llm_on", task_id="task_llm_on", job=self._job(), dry_run=True)
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertTrue(summarize_mock.called)
+        content = Path(result.path).read_text(encoding="utf-8")
+        self.assertIn("LLM summarized fact. (via X signal, LLM要約)", content)
+        self.assertIn("LLM importance.", content)
+
+    def test_llm_deny_falls_back_to_deterministic_and_records_event(self) -> None:
+        os.environ["X_MCP_URL"] = "http://x-mcp.local"
+        os.environ["CLAUDE_PROXY_URL"] = "http://claude-proxy.local"
+        os.environ["CLAUDE_PROXY_SESSION_TOKEN"] = "token-abc"
+        os.environ["AUTH_PROXY_URL"] = "http://auth-proxy.local"
+        fake_mcp = self._fake_mcp_client()
+
+        class FakeResponse:
+            def __init__(self, body: dict) -> None:
+                self._body = json.dumps(body).encode("utf-8")
+
+            def read(self) -> bytes:
+                return self._body
+
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+        def urlopen_side_effect(request, timeout=None):
+            payload = json.loads(request.data.decode("utf-8"))
+            if payload.get("tool_name") == "claude.summarize_signals":
+                return FakeResponse({"decision": "block", "reason": "denied", "policy_version": "1"})
+            return FakeResponse({"decision": "allow", "reason": "ok", "policy_version": "1"})
+
+        claude_factory_calls: list[Any] = []
+
+        def claude_client_factory(session_id: str, role: str) -> FakeClaudeClient:
+            claude_factory_calls.append((session_id, role))
+            return FakeClaudeClient(session_id, role)
+
+        runner = AiItTopicRunner(
+            config=self.config,
+            repository=self.repository,
+            policy_engine=self.policy_engine,
+            mcp_client_factory=lambda base_url: fake_mcp,
+            claude_client_factory=claude_client_factory,
+        )
+
+        job = self._job()
+        session_id = self.repository.create_session(source="test", role="ai_it_topic_runner", workspace_path="/tmp/ws")
+        task_id = self.repository.create_task(session_id=session_id, role="ai_it_topic_runner", input_data=job)
+
+        with mock.patch("urllib.request.urlopen", side_effect=urlopen_side_effect):
+            result = runner.run_daily_digest(session_id=session_id, task_id=task_id, job=job, dry_run=True)
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertEqual(claude_factory_calls, [])
+        content = Path(result.path).read_text(encoding="utf-8")
+        self.assertIn("(via X signal)", content)
+        self.assertNotIn("LLM要約", content)
+
+        conn = self.repository._connect()
+        try:
+            rows = conn.execute(
+                "SELECT tool_name, decision, success FROM tool_events WHERE session_id = ? AND tool_name = 'claude.summarize_signals'",
+                (session_id,),
+            ).fetchall()
+        finally:
+            conn.close()
+        self.assertTrue(len(rows) >= 1)
+        for _, decision, success in rows:
+            self.assertIn(decision, ("block", "deny"))
+            self.assertEqual(success, 0)
 
 
 if __name__ == "__main__":

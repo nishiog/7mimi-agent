@@ -11,8 +11,11 @@ from shichimimi_agent.documents.markdown import TopicDigestItem, render_ai_it_da
 from shichimimi_agent.documents.repository_writer import DocumentRepositoryWriter
 from shichimimi_agent.hooks.post_tool_use import run_post_tool_use
 from shichimimi_agent.hooks.pre_tool_use import PreToolUseInput, run_pre_tool_use
+from shichimimi_agent.config.model_selection import resolve_model
 from shichimimi_agent.mcp.client import McpHttpClient
 from shichimimi_agent.proxies.auth_proxy_client import AuthProxyClient
+from shichimimi_agent.proxies.claude_proxy_client import ClaudeProxyClient
+from shichimimi_agent.research.signal_summarizer import summarize_signals
 from shichimimi_agent.security.policy_engine import PolicyEngine
 from shichimimi_agent.util.time import now_jst
 
@@ -36,6 +39,7 @@ class AiItTopicRunner:
         policy_engine: PolicyEngine,
         auth_client: AuthProxyClient | None = None,
         mcp_client_factory: Callable[[str], McpHttpClient] | None = None,
+        claude_client_factory: Callable[[str, str], ClaudeProxyClient] | None = None,
     ) -> None:
         self.config = config
         self.repository = repository
@@ -46,6 +50,9 @@ class AiItTopicRunner:
             document_repositories=(config.policy.get("document_repositories") or {}),
         )
         self._mcp_client_factory = mcp_client_factory or (lambda base_url: McpHttpClient(base_url=base_url))
+        self._claude_client_factory = claude_client_factory or (
+            lambda session_id, role: ClaudeProxyClient(session_id=session_id, role=role)
+        )
 
     def run_daily_digest(self, *, session_id: str, task_id: str, job: dict[str, Any], dry_run: bool = True) -> RunnerResult:
         inputs = job.get("inputs") or {}
@@ -192,6 +199,7 @@ class AiItTopicRunner:
             text_redacted = (best_post.get("text_redacted") or "").strip()
             collapsed = " ".join(text_redacted.split())
             what_happened = (collapsed[:200] if collapsed else "(no text)") + " (via X signal)"
+            why_it_matters = "X で観測されたシグナル(自動収集、要ファクトチェック)"
             post_url = best_post.get("url") or ""
             urls = best_post.get("urls") or []
             # X posts are signals, never evidence: only a genuine external URL
@@ -200,11 +208,18 @@ class AiItTopicRunner:
             # back at the X post itself.
             evidence_url = urls[0] if urls else ""
 
+            summary = self._summarize_signals_if_enabled(
+                session_id=session_id, task_id=task_id, query=query, posts=posts
+            )
+            if summary is not None:
+                what_happened = summary.what_happened + " (via X signal, LLM要約)"
+                why_it_matters = summary.why_it_matters
+
             items.append(
                 TopicDigestItem(
                     topic=query,
                     what_happened=what_happened,
-                    why_it_matters="X で観測されたシグナル(自動収集、要ファクトチェック)",
+                    why_it_matters=why_it_matters,
                     evidence_url=evidence_url,
                     x_signal_url=post_url,
                     follow_up="収集シグナルの一次情報を確認する",
@@ -216,6 +231,63 @@ class AiItTopicRunner:
 
         fetched_urls = sum(1 for item in items if item.evidence_url)
         return items, reviewed_posts, fetched_urls
+
+    def _summarize_signals_if_enabled(
+        self, *, session_id: str, task_id: str, query: str, posts: list[dict[str, Any]]
+    ):
+        claude_proxy_url = os.environ.get("CLAUDE_PROXY_URL")
+        claude_proxy_session_token = os.environ.get("CLAUDE_PROXY_SESSION_TOKEN")
+        if not claude_proxy_url or not claude_proxy_session_token:
+            return None
+
+        decision = run_pre_tool_use(
+            self.auth_client,
+            PreToolUseInput(
+                session_id=session_id,
+                task_id=task_id,
+                role=self.role,
+                tool_name="claude.summarize_signals",
+                arguments={"query": query, "post_count": len(posts)},
+            ),
+        )
+        if not decision.allowed:
+            run_post_tool_use(
+                self.repository,
+                session_id=session_id,
+                task_id=task_id,
+                role=self.role,
+                tool_name="claude.summarize_signals",
+                decision=decision.decision,
+                success=0,
+                output_size=0,
+            )
+            return None
+
+        role_config = ((self.config.roles or {}).get("roles") or {}).get(self.role) or {}
+        model = resolve_model(role_config, self.config.policy)
+        client = self._claude_client_factory(session_id, self.role)
+        summary = summarize_signals(client, model=model, query=query, posts=posts)
+
+        output_size = 0
+        if summary is not None:
+            output_size = len(
+                json.dumps(
+                    {"what_happened": summary.what_happened, "why_it_matters": summary.why_it_matters},
+                    ensure_ascii=False,
+                ).encode("utf-8")
+            )
+
+        run_post_tool_use(
+            self.repository,
+            session_id=session_id,
+            task_id=task_id,
+            role=self.role,
+            tool_name="claude.summarize_signals",
+            decision=decision.decision,
+            success=1 if summary is not None else 0,
+            output_size=output_size,
+        )
+        return summary
 
     def _collect_mock_topics(self, *, session_id: str, task_id: str, queries: list[str]) -> list[TopicDigestItem]:
         for query in queries[:3]:
