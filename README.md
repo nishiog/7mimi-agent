@@ -161,7 +161,7 @@ Notes:
 
 ## Investment-cluster digest (ADR-026)
 
-`invest-x-daily-digest` (role `investment_signal_runner`, cron `0 18 * * *` JST) collects日米株・暗号資産・マクロ signals from X and publishes a Japanese Slack-mrkdwn digest via auth-proxy's `POST /v1/slack/notify` — it never pushes to the notes repo. The runner container only gets `Read,Write,WebFetch` (no git relay, no Slack credential); the orchestrator authorizes the `slack.post_digest` tool call, appends a deterministic investment-advice disclaimer footer, then hands the text to `SlackNotifyClient`, which posts it through auth-proxy (the only holder of `SLACK_WEBHOOK_URL`, chunked ≤3500 chars on line boundaries).
+`invest-x-daily-digest` (role `investment_signal_runner`, cron `0 18 * * *` JST) collects日米株・暗号資産・マクロ signals from X and publishes a Japanese Slack-mrkdwn digest via auth-proxy's `POST /v1/slack/notify` — it never pushes to the notes repo. The runner container only gets `Read,Write,WebFetch` (no git relay, no Slack credential); the orchestrator authorizes the `slack.post_digest` tool call, appends a deterministic investment-advice disclaimer footer, then hands the text to `SlackNotifyClient`, which posts it through auth-proxy (the only holder of the Slack App bot token, chunked ≤3500 chars on line boundaries).
 
 ```bash
 # requires X_MCP_URL/X_MCP_SESSION_TOKEN, CLAUDE_PROXY_URL/CLAUDE_PROXY_SESSION_TOKEN,
@@ -169,4 +169,10 @@ Notes:
 PYTHONPATH=src python3 -m shichimimi_agent invest-digest --job invest-x-daily-digest
 ```
 
-Set `SLACK_WEBHOOK_URL` in `.env` to enable auth-proxy's `/v1/slack/notify` route; leaving it unset keeps the route unmounted and the job unable to publish.
+auth-proxy's `/v1/slack/notify` route delivers via the Slack Web API (`chat.postMessage`) using a Slack App bot token, not an Incoming Webhook — this leaves room to add mention receiving (Events API / Socket Mode) later. To enable it:
+
+1. Create (or reuse) a Slack App and grant it the `chat:write` bot scope, then install it to your workspace to obtain a bot token (`xoxb-...`).
+2. Invite the bot to the target channel: `/invite @your-bot-name`.
+3. Set `SLACK_BOT_TOKEN` and `SLACK_CHANNEL_ID` in `.env`.
+
+Leaving either unset keeps `/v1/slack/notify` unmounted and the job unable to publish.

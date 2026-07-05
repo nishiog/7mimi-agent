@@ -210,12 +210,13 @@ class ComposeConfigTest(unittest.TestCase):
         expected = "${AUTH_PROXY_SESSION_TOKEN:?AUTH_PROXY_SESSION_TOKEN is required}"
         self.assertEqual(scheduler_env["SLACK_NOTIFY_SESSION_TOKEN"], expected)
 
-    def test_auth_proxy_slack_webhook_url_is_optional(self) -> None:
-        """SLACK_WEBHOOK_URL must NOT use the required ${VAR:?...} syntax:
-        an unset value should silently leave /v1/slack/notify unmounted, not
-        fail `docker compose config`."""
+    def test_auth_proxy_slack_bot_token_and_channel_are_optional(self) -> None:
+        """SLACK_BOT_TOKEN/SLACK_CHANNEL_ID must NOT use the required
+        ${VAR:?...} syntax: unset values should silently leave
+        /v1/slack/notify unmounted, not fail `docker compose config`."""
         auth_proxy_env = self.compose["services"]["auth-proxy"]["environment"]
-        self.assertEqual(auth_proxy_env["SLACK_WEBHOOK_URL"], "${SLACK_WEBHOOK_URL:-}")
+        self.assertEqual(auth_proxy_env["SLACK_BOT_TOKEN"], "${SLACK_BOT_TOKEN:-}")
+        self.assertEqual(auth_proxy_env["SLACK_CHANNEL_ID"], "${SLACK_CHANNEL_ID:-}")
 
     def test_required_secrets_use_required_var_syntax(self) -> None:
         """Secrets must use ${VAR:?msg} so `docker compose config` fails

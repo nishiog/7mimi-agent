@@ -117,23 +117,31 @@ func mountXMCP(mux *http.ServeMux, logger *audit.Logger) {
 	mux.Handle("/mcp", handler.Routes())
 }
 
-// mountSlackNotify mounts POST /v1/slack/notify (ADR-026) only when both
-// AUTH_PROXY_SESSION_TOKEN and SLACK_WEBHOOK_URL are configured; otherwise it
-// logs a non-sensitive reason and leaves the route unmounted. SLACK_WEBHOOK_URL
-// is optional at the platform level (the investment digest job is opt-in).
+// mountSlackNotify mounts POST /v1/slack/notify (ADR-026) only when
+// AUTH_PROXY_SESSION_TOKEN, SLACK_BOT_TOKEN, and SLACK_CHANNEL_ID are all
+// configured; otherwise it logs a non-sensitive reason and leaves the route
+// unmounted. Both Slack vars are optional at the platform level (the
+// investment digest job is opt-in). SLACK_API_BASE_URL is an internal
+// override (tests only) for the Slack Web API base URL.
 func mountSlackNotify(mux *http.ServeMux, logger *audit.Logger) {
 	sessionToken := os.Getenv("AUTH_PROXY_SESSION_TOKEN")
-	webhookURL := os.Getenv("SLACK_WEBHOOK_URL")
+	botToken := os.Getenv("SLACK_BOT_TOKEN")
+	channelID := os.Getenv("SLACK_CHANNEL_ID")
+	apiBase := os.Getenv("SLACK_API_BASE_URL")
 	if sessionToken == "" {
 		log.Printf("slack-notify disabled: no session token configured")
 		return
 	}
-	if webhookURL == "" {
-		log.Printf("slack-notify disabled: SLACK_WEBHOOK_URL not set")
+	if botToken == "" {
+		log.Printf("slack-notify disabled: SLACK_BOT_TOKEN not set")
+		return
+	}
+	if channelID == "" {
+		log.Printf("slack-notify disabled: SLACK_CHANNEL_ID not set")
 		return
 	}
 
-	handler, err := slacknotify.NewHandler(sessionToken, webhookURL, logger)
+	handler, err := slacknotify.NewHandler(sessionToken, botToken, channelID, apiBase, logger)
 	if err != nil {
 		log.Printf("slack-notify disabled: handler construction failed")
 		return

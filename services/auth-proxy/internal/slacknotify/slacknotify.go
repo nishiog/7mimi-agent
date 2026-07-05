@@ -1,8 +1,9 @@
 // Package slacknotify implements POST /v1/slack/notify (ADR-026): a
 // credential-free agent-runner (or the scheduler orchestrator) is authorized
-// via a static session bearer token, and auth-proxy relays the message to a
-// Slack incoming webhook it alone holds the URL for. The webhook URL is a
-// secret and is never logged or echoed back in error responses.
+// via a static session bearer token, and auth-proxy relays the message to
+// Slack via the Slack Web API (chat.postMessage) using a Slack App bot token
+// it alone holds. The bot token is a secret and is never logged or echoed
+// back in error responses.
 package slacknotify
 
 import (
@@ -20,32 +21,45 @@ import (
 )
 
 const (
-	maxBodyBytes = 200 * 1024 // 200KB
-	maxChunkLen  = 3500
-	chunkDelay   = 700 * time.Millisecond
+	maxBodyBytes       = 200 * 1024 // 200KB
+	maxChunkLen        = 3500
+	chunkDelay         = 700 * time.Millisecond
+	defaultSlackAPIURL = "https://slack.com"
 )
 
 // Handler serves POST /v1/slack/notify.
 type Handler struct {
 	sessionToken string
-	webhookURL   string
+	botToken     string
+	channelID    string
+	apiBase      string
 	logger       *audit.Logger
 	httpClient   *http.Client
 	sleep        func(time.Duration)
 }
 
-// NewHandler builds the slacknotify handler. sessionToken and webhookURL
-// must both be non-empty (fail-closed; there is no default).
-func NewHandler(sessionToken, webhookURL string, logger *audit.Logger) (*Handler, error) {
+// NewHandler builds the slacknotify handler. sessionToken, botToken, and
+// channelID must all be non-empty (fail-closed; there is no default). apiBase
+// defaults to https://slack.com when empty (override via SLACK_API_BASE_URL
+// for tests).
+func NewHandler(sessionToken, botToken, channelID, apiBase string, logger *audit.Logger) (*Handler, error) {
 	if sessionToken == "" {
 		return nil, errors.New("slacknotify: session token must not be empty")
 	}
-	if webhookURL == "" {
-		return nil, errors.New("slacknotify: webhook url must not be empty")
+	if botToken == "" {
+		return nil, errors.New("slacknotify: bot token must not be empty")
+	}
+	if channelID == "" {
+		return nil, errors.New("slacknotify: channel id must not be empty")
+	}
+	if apiBase == "" {
+		apiBase = defaultSlackAPIURL
 	}
 	return &Handler{
 		sessionToken: sessionToken,
-		webhookURL:   webhookURL,
+		botToken:     botToken,
+		channelID:    channelID,
+		apiBase:      apiBase,
 		logger:       logger,
 		httpClient:   &http.Client{Timeout: 20 * time.Second},
 		sleep:        time.Sleep,
@@ -116,8 +130,8 @@ func (h *Handler) handleNotify(w http.ResponseWriter, r *http.Request) {
 			h.sleep(chunkDelay)
 		}
 		if err := h.postChunk(chunk); err != nil {
-			h.audit("block", "webhook error chunk="+strconv.Itoa(i), len(chunks), len(req.Text), time.Since(start))
-			http.Error(w, "upstream webhook error at chunk "+strconv.Itoa(i), http.StatusBadGateway)
+			h.audit("block", "slack api error chunk="+strconv.Itoa(i), len(chunks), len(req.Text), time.Since(start))
+			http.Error(w, "upstream slack api error at chunk "+strconv.Itoa(i)+": "+err.Error(), http.StatusBadGateway)
 			return
 		}
 	}
@@ -128,24 +142,56 @@ func (h *Handler) handleNotify(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(notifyResponse{Chunks: len(chunks)})
 }
 
+// slackAPIError carries a Slack error code (e.g. "channel_not_found") as
+// returned by chat.postMessage's "error" field, or a synthesized code for
+// transport-level failures. It is never a secret, so it is safe to surface
+// in the 502 response.
+type slackAPIError struct {
+	code string
+}
+
+func (e *slackAPIError) Error() string {
+	return e.code
+}
+
 func (h *Handler) postChunk(text string) error {
-	payload, err := json.Marshal(map[string]string{"text": text})
+	payload, err := json.Marshal(map[string]string{
+		"channel": h.channelID,
+		"text":    text,
+	})
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest(http.MethodPost, h.webhookURL, bytes.NewReader(payload))
+	req, err := http.NewRequest(http.MethodPost, h.apiBase+"/api/chat.postMessage", bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+h.botToken)
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return errors.New("webhook returned non-2xx status")
+		return &slackAPIError{code: "http_status_" + strconv.Itoa(resp.StatusCode)}
+	}
+
+	var apiResp struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(respBody, &apiResp); err != nil {
+		return &slackAPIError{code: "invalid_response"}
+	}
+	if !apiResp.OK {
+		code := apiResp.Error
+		if code == "" {
+			code = "unknown_error"
+		}
+		return &slackAPIError{code: code}
 	}
 	return nil
 }

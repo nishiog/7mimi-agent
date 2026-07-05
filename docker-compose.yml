@@ -46,7 +46,8 @@ services:
       X_BEARER_TOKEN: ${X_BEARER_TOKEN:?X_BEARER_TOKEN is required}
       # Optional (ADR-026): unset means /v1/slack/notify stays unmounted and
       # the invest-x-daily-digest job cannot publish. Never required here.
-      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
+      SLACK_CHANNEL_ID: ${SLACK_CHANNEL_ID:-}
     volumes:
       - ${GITHUB_APP_PRIVATE_KEY_HOST_PATH:?GITHUB_APP_PRIVATE_KEY_HOST_PATH is required}:/secrets/github-app-key.pem:ro
     restart: unless-stopped

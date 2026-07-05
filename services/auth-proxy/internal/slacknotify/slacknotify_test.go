@@ -11,9 +11,14 @@ import (
 	"github.com/7milch/7mimi-agent/services/auth-proxy/internal/audit"
 )
 
-func newTestHandler(t *testing.T, webhook *httptest.Server) *Handler {
+const (
+	testBotToken  = "test-bot-token-value"
+	testChannelID = "C0123456789"
+)
+
+func newTestHandler(t *testing.T, slackAPI *httptest.Server) *Handler {
 	t.Helper()
-	h, err := NewHandler("test-session-token", webhook.URL, audit.NewLogger(&strings.Builder{}))
+	h, err := NewHandler("test-session-token", testBotToken, testChannelID, slackAPI.URL, audit.NewLogger(&strings.Builder{}))
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
 	}
@@ -32,12 +37,65 @@ func doNotify(t *testing.T, h *Handler, token string, body string) *httptest.Res
 	return rec
 }
 
-func TestAuthMissingToken(t *testing.T) {
-	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// okSlackAPIServer returns a stub Slack Web API server that asserts the
+// Authorization bearer and channel/text fields, records each chunk, and
+// replies {"ok":true}.
+func okSlackAPIServer(t *testing.T, received *[]string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat.postMessage" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer "+testBotToken {
+			t.Fatalf("unexpected Authorization header: %q", got)
+		}
+		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+			t.Fatalf("unexpected Content-Type: %q", ct)
+		}
+		var payload struct {
+			Channel string `json:"channel"`
+			Text    string `json:"text"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		if payload.Channel != testChannelID {
+			t.Fatalf("unexpected channel: %q", payload.Channel)
+		}
+		if received != nil {
+			*received = append(*received, payload.Text)
+		}
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 	}))
-	defer webhook.Close()
-	h := newTestHandler(t, webhook)
+}
+
+func TestNewHandlerRequiresAllFields(t *testing.T) {
+	logger := audit.NewLogger(&strings.Builder{})
+	cases := []struct {
+		name         string
+		sessionToken string
+		botToken     string
+		channelID    string
+	}{
+		{"missing session token", "", testBotToken, testChannelID},
+		{"missing bot token", "test-session-token", "", testChannelID},
+		{"missing channel id", "test-session-token", testBotToken, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := NewHandler(tc.sessionToken, tc.botToken, tc.channelID, "", logger); err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+		})
+	}
+}
+
+func TestAuthMissingToken(t *testing.T) {
+	slackAPI := okSlackAPIServer(t, nil)
+	defer slackAPI.Close()
+	h := newTestHandler(t, slackAPI)
 
 	rec := doNotify(t, h, "", `{"text":"hi"}`)
 	if rec.Code != http.StatusUnauthorized {
@@ -46,11 +104,9 @@ func TestAuthMissingToken(t *testing.T) {
 }
 
 func TestAuthWrongToken(t *testing.T) {
-	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer webhook.Close()
-	h := newTestHandler(t, webhook)
+	slackAPI := okSlackAPIServer(t, nil)
+	defer slackAPI.Close()
+	h := newTestHandler(t, slackAPI)
 
 	rec := doNotify(t, h, "wrong-token", `{"text":"hi"}`)
 	if rec.Code != http.StatusUnauthorized {
@@ -59,11 +115,9 @@ func TestAuthWrongToken(t *testing.T) {
 }
 
 func TestEmptyTextRejected(t *testing.T) {
-	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer webhook.Close()
-	h := newTestHandler(t, webhook)
+	slackAPI := okSlackAPIServer(t, nil)
+	defer slackAPI.Close()
+	h := newTestHandler(t, slackAPI)
 
 	for _, body := range []string{`{"text":""}`, `{}`, ``} {
 		rec := doNotify(t, h, "test-session-token", body)
@@ -74,11 +128,9 @@ func TestEmptyTextRejected(t *testing.T) {
 }
 
 func TestOversizePayloadRejected(t *testing.T) {
-	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer webhook.Close()
-	h := newTestHandler(t, webhook)
+	slackAPI := okSlackAPIServer(t, nil)
+	defer slackAPI.Close()
+	h := newTestHandler(t, slackAPI)
 
 	big := strings.Repeat("a", 200*1024+100)
 	body, _ := json.Marshal(map[string]string{"text": big})
@@ -90,14 +142,9 @@ func TestOversizePayloadRejected(t *testing.T) {
 
 func TestSingleChunkPassthrough(t *testing.T) {
 	var received []string
-	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var payload map[string]string
-		_ = json.NewDecoder(r.Body).Decode(&payload)
-		received = append(received, payload["text"])
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer webhook.Close()
-	h := newTestHandler(t, webhook)
+	slackAPI := okSlackAPIServer(t, &received)
+	defer slackAPI.Close()
+	h := newTestHandler(t, slackAPI)
 
 	rec := doNotify(t, h, "test-session-token", `{"text":"hello slack"}`)
 	if rec.Code != http.StatusOK {
@@ -111,20 +158,15 @@ func TestSingleChunkPassthrough(t *testing.T) {
 		t.Fatalf("expected 1 chunk, got %d", resp.Chunks)
 	}
 	if len(received) != 1 || received[0] != "hello slack" {
-		t.Fatalf("unexpected webhook payloads: %v", received)
+		t.Fatalf("unexpected slack api payloads: %v", received)
 	}
 }
 
 func TestMultiChunkLineBoundarySplit(t *testing.T) {
 	var received []string
-	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var payload map[string]string
-		_ = json.NewDecoder(r.Body).Decode(&payload)
-		received = append(received, payload["text"])
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer webhook.Close()
-	h := newTestHandler(t, webhook)
+	slackAPI := okSlackAPIServer(t, &received)
+	defer slackAPI.Close()
+	h := newTestHandler(t, slackAPI)
 
 	// Build text with distinct lines that must total > 3500 chars so it
 	// splits into multiple chunks, verifying no line is cut mid-line.
@@ -169,14 +211,9 @@ func TestMultiChunkLineBoundarySplit(t *testing.T) {
 
 func TestLongSingleLineHardSplit(t *testing.T) {
 	var received []string
-	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var payload map[string]string
-		_ = json.NewDecoder(r.Body).Decode(&payload)
-		received = append(received, payload["text"])
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer webhook.Close()
-	h := newTestHandler(t, webhook)
+	slackAPI := okSlackAPIServer(t, &received)
+	defer slackAPI.Close()
+	h := newTestHandler(t, slackAPI)
 
 	longLine := strings.Repeat("a", 9000)
 	rec := doNotify(t, h, "test-session-token", mustJSON(t, longLine))
@@ -197,39 +234,57 @@ func TestLongSingleLineHardSplit(t *testing.T) {
 	}
 }
 
-func TestWebhookErrorReturns502NoURLLeak(t *testing.T) {
-	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestSlackAPIHTTPErrorReturns502NoTokenLeak(t *testing.T) {
+	slackAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
-	defer webhook.Close()
-	h := newTestHandler(t, webhook)
+	defer slackAPI.Close()
+	h := newTestHandler(t, slackAPI)
 
 	rec := doNotify(t, h, "test-session-token", `{"text":"hi"}`)
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("expected 502, got %d", rec.Code)
 	}
-	if strings.Contains(rec.Body.String(), webhook.URL) {
-		t.Fatalf("response leaked webhook URL: %s", rec.Body.String())
+	if strings.Contains(rec.Body.String(), testBotToken) {
+		t.Fatalf("response leaked bot token: %s", rec.Body.String())
 	}
 	if strings.Contains(rec.Body.String(), "hi") {
 		t.Fatalf("response leaked message text: %s", rec.Body.String())
 	}
 }
 
-func TestAuditLogsNoTextOrURL(t *testing.T) {
-	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestSlackAPIOKFalseReturns502WithErrorCodeNoTokenLeak(t *testing.T) {
+	slackAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "channel_not_found"})
 	}))
-	defer webhook.Close()
+	defer slackAPI.Close()
+	h := newTestHandler(t, slackAPI)
 
+	rec := doNotify(t, h, "test-session-token", `{"text":"hi"}`)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "channel_not_found") {
+		t.Fatalf("expected error code in response, got: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), testBotToken) {
+		t.Fatalf("response leaked bot token: %s", rec.Body.String())
+	}
+}
+
+func TestAuditLogsNoTextOrToken(t *testing.T) {
 	var logBuf strings.Builder
-	h, err := NewHandler("test-session-token", webhook.URL, audit.NewLogger(&logBuf))
+	slackAPI := okSlackAPIServer(t, nil)
+	defer slackAPI.Close()
+	h, err := NewHandler("test-session-token", testBotToken, testChannelID, slackAPI.URL, audit.NewLogger(&logBuf))
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
 	}
 	h.sleep = func(time.Duration) {}
 
-	secretText := "super-secret-message-content webhook=" + webhook.URL
+	secretText := "super-secret-message-content token=" + testBotToken
 	rec := doNotify(t, h, "test-session-token", mustJSON(t, secretText))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -239,8 +294,11 @@ func TestAuditLogsNoTextOrURL(t *testing.T) {
 	if strings.Contains(logOutput, "super-secret-message-content") {
 		t.Fatalf("audit log leaked message content: %s", logOutput)
 	}
-	if strings.Contains(logOutput, webhook.URL) {
-		t.Fatalf("audit log leaked webhook URL: %s", logOutput)
+	if strings.Contains(logOutput, testBotToken) {
+		t.Fatalf("audit log leaked bot token: %s", logOutput)
+	}
+	if strings.Contains(logOutput, testChannelID) {
+		t.Fatalf("audit log leaked channel id: %s", logOutput)
 	}
 	if !strings.Contains(logOutput, "chunks=") || !strings.Contains(logOutput, "total_len=") || !strings.Contains(logOutput, "duration_ms=") {
 		t.Fatalf("audit log missing expected metadata fields: %s", logOutput)
