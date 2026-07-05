@@ -6,7 +6,6 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Any
 from unittest import mock
 
 from shichimimi_agent.config import load_config
@@ -16,43 +15,14 @@ from shichimimi_agent.proxies.slack_notify_client import SlackNotifyClient, Slac
 from shichimimi_agent.runner.invest_digest import (
     DISCLAIMER_FOOTER,
     INVEST_ALLOWED_TOOLS,
+    INVEST_DIRECT_MCP_ALLOWED_TOOLS,
     InvestDigestOptions,
     build_invest_digest_prompt,
     run_invest_digest,
 )
+from shichimimi_agent.runner.mcp_session import IssuedSession
 from shichimimi_agent.security.policy_engine import PolicyEngine
 from shichimimi_agent.sessions.workspace import create_workspace
-
-
-def _post(post_id: str) -> dict[str, Any]:
-    return {
-        "id": post_id,
-        "url": f"https://x.com/alice/status/{post_id}",
-        "author_handle": "alice",
-        "created_at": "2026-07-01T00:00:00Z",
-        "text_redacted": "some observed text",
-        "urls": [],
-        "topics": [],
-        "engagement": {"like_count": 1, "repost_count": 0},
-        "collected_at": "2026-07-01T00:05:00Z",
-    }
-
-
-class FakeMcpClient:
-    def __init__(self, base_url: str, *, posts_by_query=None) -> None:
-        self.base_url = base_url
-        self.posts_by_query = posts_by_query or {}
-        self.initialized = False
-
-    def initialize(self) -> dict[str, Any]:
-        self.initialized = True
-        return {"protocolVersion": "2025-03-26"}
-
-    def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        query = arguments["query"]
-        posts = self.posts_by_query.get(query, [_post("1")])
-        text = json.dumps({"posts": posts})
-        return {"content": [{"type": "text", "text": text}], "isError": False}
 
 
 class FakeSlackClient:
@@ -75,6 +45,15 @@ class BuildInvestDigestPromptTest(unittest.TestCase):
         self.assertIn("digest.md", prompt)
         self.assertIn("mrkdwn", prompt)
         self.assertNotIn("git push", prompt)
+        # ADR-028: direct /mcp collection is the sole flow -- no
+        # pre-collected signals.json to reference; cost guardrails present.
+        self.assertNotIn("signals.json", prompt)
+        self.assertIn("最大 12 回", prompt)
+        self.assertIn("max_results", prompt)
+        self.assertIn("10 以下", prompt)
+        self.assertIn("再試行", prompt)
+        self.assertIn("tools/list", prompt)
+        self.assertIn("prompt injection", prompt)
 
 
 class RunInvestDigestEndToEndTest(unittest.TestCase):
@@ -91,8 +70,8 @@ class RunInvestDigestEndToEndTest(unittest.TestCase):
         self.workspace = create_workspace(self.root, self.session_id)
 
         self._env_backup = dict(os.environ)
-        os.environ["X_MCP_URL"] = "http://x-mcp.local"
-        os.environ["X_MCP_SESSION_TOKEN"] = "test-x-mcp-session-token"
+        os.environ["X_MCP_URL"] = "http://auth-proxy:18081"
+        os.environ["X_MCP_SESSION_TOKEN"] = "static-admin-token"
         os.environ["CLAUDE_PROXY_URL"] = "http://claude-proxy.local"
         os.environ["CLAUDE_PROXY_SESSION_TOKEN"] = "test-claude-proxy-session-token"
         os.environ.pop("GIT_PROXY_URL", None)
@@ -103,9 +82,6 @@ class RunInvestDigestEndToEndTest(unittest.TestCase):
         os.environ.update(self._env_backup)
         self._tmpdir.cleanup()
 
-    def _fake_mcp_factory(self, base_url: str) -> FakeMcpClient:
-        return FakeMcpClient(base_url)
-
     def _run_with_fake_docker(self, *, digest_content: str | None, returncode: int = 0, slack_client=None):
         job = {"role": "investment_signal_runner", "inputs": {"query_set": "invest_watch"}}
 
@@ -114,7 +90,9 @@ class RunInvestDigestEndToEndTest(unittest.TestCase):
                 (self.workspace / "digest.md").write_text(digest_content, encoding="utf-8")
             return subprocess.CompletedProcess(cmd, returncode, stdout="", stderr="")
 
-        with mock.patch("shichimimi_agent.runner.invest_digest.subprocess.run", side_effect=fake_run):
+        with mock.patch("shichimimi_agent.runner.invest_digest.subprocess.run", side_effect=fake_run), \
+             mock.patch("shichimimi_agent.runner.invest_digest.issue_session") as issue_mock:
+            issue_mock.return_value = IssuedSession(token="minted-invest-tok", ttl_seconds=2100)
             return run_invest_digest(
                 config=self.config,
                 repository=self.repository,
@@ -124,7 +102,6 @@ class RunInvestDigestEndToEndTest(unittest.TestCase):
                 job=job,
                 options=InvestDigestOptions(),
                 auth_client=self.auth_client,
-                mcp_client_factory=self._fake_mcp_factory,
                 slack_client=slack_client or FakeSlackClient(),
             )
 
@@ -162,9 +139,8 @@ class RunInvestDigestEndToEndTest(unittest.TestCase):
         self.assertNotEqual(result.exit_code, 0)
 
     def test_deny_blocks_publish_and_never_calls_slack(self) -> None:
-        """slack.post_digest denied: collection (x.search_posts_recent) is
-        still allowed by the underlying engine, but the publish step must be
-        blocked and must never reach SlackNotifyClient."""
+        """slack.post_digest denied: the publish step must be blocked and
+        must never reach SlackNotifyClient."""
         from shichimimi_agent.security.policy_engine import PolicyDecision
 
         policy_config = self.config.policy
@@ -185,7 +161,9 @@ class RunInvestDigestEndToEndTest(unittest.TestCase):
             (self.workspace / "digest.md").write_text("*日経平均*", encoding="utf-8")
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
-        with mock.patch("shichimimi_agent.runner.invest_digest.subprocess.run", side_effect=fake_run):
+        with mock.patch("shichimimi_agent.runner.invest_digest.subprocess.run", side_effect=fake_run), \
+             mock.patch("shichimimi_agent.runner.invest_digest.issue_session") as issue_mock:
+            issue_mock.return_value = IssuedSession(token="minted-invest-tok", ttl_seconds=2100)
             result = run_invest_digest(
                 config=self.config,
                 repository=self.repository,
@@ -195,7 +173,6 @@ class RunInvestDigestEndToEndTest(unittest.TestCase):
                 job=job,
                 options=InvestDigestOptions(),
                 auth_client=DenySlackPostAuthClient(),
-                mcp_client_factory=self._fake_mcp_factory,
                 slack_client=slack_client,
             )
         self.assertFalse(result.published)
@@ -207,6 +184,60 @@ class RunInvestDigestEndToEndTest(unittest.TestCase):
         self.assertNotIn("GIT_PROXY_URL", os.environ)
         result = self._run_with_fake_docker(digest_content="*日経平均*")
         self.assertTrue(result.published)
+
+    def test_mcp_config_minted_with_investment_signal_runner_role(self) -> None:
+        with mock.patch("shichimimi_agent.runner.invest_digest.subprocess.run") as run_mock, \
+             mock.patch("shichimimi_agent.runner.invest_digest.issue_session") as issue_mock:
+            issue_mock.return_value = IssuedSession(token="minted-invest-tok", ttl_seconds=2100)
+
+            def fake_run(cmd, **kwargs):
+                (self.workspace / "digest.md").write_text("*日経平均*", encoding="utf-8")
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+            run_mock.side_effect = fake_run
+            job = {"role": "investment_signal_runner", "inputs": {"query_set": "invest_watch"}}
+            run_invest_digest(
+                config=self.config,
+                repository=self.repository,
+                session_id=self.session_id,
+                task_id=self.task_id,
+                workspace=self.workspace,
+                job=job,
+                options=InvestDigestOptions(),
+                auth_client=self.auth_client,
+                slack_client=FakeSlackClient(),
+            )
+
+        issue_mock.assert_called_once()
+        _, kwargs = issue_mock.call_args
+        self.assertEqual(kwargs["role"], "investment_signal_runner")
+
+        self.assertFalse((self.workspace / "signals.json").exists())
+        self.assertTrue((self.workspace / ".mcp.json").exists())
+        written = json.loads((self.workspace / ".mcp.json").read_text(encoding="utf-8"))
+        self.assertEqual(written["mcpServers"]["x7mimi"]["headers"]["Authorization"], "Bearer minted-invest-tok")
+
+        docker_cmd = run_mock.call_args.args[0]
+        allowed_idx = docker_cmd.index("--allowedTools")
+        self.assertEqual(docker_cmd[allowed_idx + 1], INVEST_DIRECT_MCP_ALLOWED_TOOLS)
+        self.assertIn("--mcp-config", docker_cmd)
+        self.assertNotIn("GIT_CONFIG_COUNT", " ".join(docker_cmd))
+
+    def test_missing_x_mcp_url_raises(self) -> None:
+        del os.environ["X_MCP_URL"]
+        job = {"role": "investment_signal_runner", "inputs": {"query_set": "invest_watch"}}
+        with self.assertRaises(ValueError):
+            run_invest_digest(
+                config=self.config,
+                repository=self.repository,
+                session_id=self.session_id,
+                task_id=self.task_id,
+                workspace=self.workspace,
+                job=job,
+                options=InvestDigestOptions(),
+                auth_client=self.auth_client,
+                slack_client=FakeSlackClient(),
+            )
 
 
 class BuildDockerCommandInvestFlavorTest(unittest.TestCase):

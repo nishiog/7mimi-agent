@@ -1,6 +1,7 @@
 """ADR-028: mint role-bound session tokens from auth-proxy's POST
-/session/issue for the ai-it digest's direct /mcp connection mode
-(X_MCP_DIRECT=1).
+/session/issue for the digest jobs' direct /mcp connection (the sole
+collection flow for both ai-it and invest; the old pre-collection path
+was removed).
 
 The orchestrator (the only holder of the static AUTH_PROXY_SESSION_TOKEN /
 X_MCP_SESSION_TOKEN admin credential) calls issue_session to mint a

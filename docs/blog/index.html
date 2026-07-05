@@ -161,9 +161,11 @@ sequenceDiagram
   participant R as agent-runner (Claude Code)
   participant C as claude-proxy (Go)
   S-&gt;&gt;O: 08:00 JST 発火
-  O-&gt;&gt;A: /mcp x.search_posts_recent ×18クエリ(認可フック通過後)
-  A-&gt;&gt;A: X Bearer 注入 → X API v2 → 正規化 + redaction
-  O-&gt;&gt;R: signals.json を workspace に置いて起動&lt;br/&gt;(allowedTools: Read,Write,WebFetch,Bash(git:*))
+  O-&gt;&gt;A: POST /session/issue (静的 token, role=ai_it_topic_runner)
+  A-&gt;&gt;O: role 付き短命 token (TTL 約35分)
+  O-&gt;&gt;R: .mcp.json を workspace に書いて起動&lt;br/&gt;(allowedTools: Read,Write,WebFetch,Bash(git:*),mcp__x7mimi__*)
+  R-&gt;&gt;A: /mcp tools/list → x_search_posts_recent ×最大12&lt;br/&gt;(role-bound Bearer, ハード呼び出し上限)
+  A-&gt;&gt;A: role×tool 判定 → X Bearer 注入 → X API v2 → 正規化 + redaction
   R-&gt;&gt;C: LLM 呼び出し (ANTHROPIC_BASE_URL 経由)
   C-&gt;&gt;C: API キー注入 → Anthropic へ中継 (SSE 透過)
   R-&gt;&gt;R: トピック選定 → WebFetch で一次情報確認 → 日本語で執筆
@@ -289,9 +291,21 @@ func (t *TokenSource) appJWT() (string, error) {
 )</code></pre>
 <p>LLM が書き忘れても、指示を無視しても、このフッターは消せません。「guardrail はプロンプトではなくプラットフォーム層に置く」の最小の実例です。</p>
 <h2 id="ch-9">第 9 章 自律 digest の作り方(claude-digest)</h2>
-<p>部品が揃ったところで、「調査から公開まで」を 1 本に繋いだのが統合ジョブ <strong>claude-digest</strong> です(ADR-021、<code>runner/claude_digest.py</code>)。設計上の選択がいくつかあります。</p>
-<p><strong>収集は orchestrator 側で事前に行う。</strong> X API の呼び出しをコンテナ内 LLM にやらせず、orchestrator がクエリごとに PreToolUse 認可 → MCP <code>tools/call</code> → PostToolUse 監査、を回して結果を <code>signals.json</code> として workspace に置きます。X API 呼び出しを決定的な認可・監査の下に保ち、<strong>コンテナ内 Claude の tool 面を最小化する</strong>ためです。収集は per-query 耐障害で、個別クエリの失敗(レート制限など)はスキップして <code>failed_queries</code> に記録、全滅時のみ失敗。ただし<strong>認可 deny だけは即時中断</strong>します — 1 クエリへの deny は残り全クエリへの deny を意味する決定的判断だからです。</p>
-<p><strong>allowedTools は最小 4 種。</strong> コンテナ内 Claude は <code>Read,Write,WebFetch,Bash(git:*)</code> だけで起動します。signals.json を読み、トピックを選び、WebFetch で一次情報を確認し、日本語で書き、git relay 経由で push する — それ以外の道具はありません。</p>
+<p>部品が揃ったところで、「調査から公開まで」を 1 本に繋いだのが統合ジョブ <strong>claude-digest</strong> です(ADR-021 / ADR-028、<code>runner/claude_digest.py</code>)。設計上の選択がいくつかあります。</p>
+<p><strong>収集はコンテナ内 Claude が /mcp を直接叩いて自律的に行う。</strong> 初期実装では orchestrator が X API を事前収集して <code>signals.json</code> を workspace に置いていましたが、これは暫定経路で、ADR-028 で完全に撤去しました。現在は、orchestrator が <strong>role を紐付けた短命セッショントークン</strong>を auth-proxy の <code>POST /session/issue</code>(静的トークンで認証)で発行し(TTL 約 35 分)、それを Bearer ヘッダに載せた <code>.mcp.json</code> を workspace に書き込みます。コンテナ内の Claude Code はその MCP サーバに接続して、<strong>自分で X 検索 tool を呼び</strong>、トピックを集めます。<code>.mcp.json</code> の実体はこれだけです。</p>
+<pre><code class="language-json">{
+  &quot;mcpServers&quot;: {
+    &quot;x7mimi&quot;: {
+      &quot;type&quot;: &quot;http&quot;,
+      &quot;url&quot;: &quot;http://auth-proxy:18081/mcp&quot;,
+      &quot;headers&quot;: { &quot;Authorization&quot;: &quot;Bearer &lt;role 付き短命 token&gt;&quot; }
+    }
+  }
+}</code></pre>
+<p>起動は <code>--mcp-config /workspace/.mcp.json --strict-mcp-config</code> で配線します。Claude Code は MCP サーバ名(<code>x7mimi</code>)と tool 名からツール ID を合成するので、<code>allowedTools</code> には<strong>ドットをアンダースコアに変えた</strong> <code>mcp__x7mimi__x_search_posts_recent</code> の形で並べます(4 tool 分)。この HTTP-MCP の「<code>--mcp-config</code> の <code>headers</code> が実際に上流へ Authorization を付与するか」という挙動は事前に小さな spike で確かめ、回帰しないよう Claude Code のバージョンを Dockerfile で pin しています。</p>
+<p><strong>認可とコストは LLM の外側で決定的に締める。</strong> これが直結化のキモです。<code>/mcp</code> は Go 側で <strong>role×tool を判定</strong>し、<code>tools/list</code> の時点で role が許可されない tool を消すので、コンテナ内 Claude はそもそも禁止 tool を見えません(拒否は JSON-RPC error + block 監査)。さらに <code>/mcp</code> は read-only な evidence/signal tool <strong>だけ</strong>を載せ、書き込み境界(git relay / Slack)は別サーフェスに置いたまま — 自己選択して安全なのは「見えるのが読み取りだけ」だからです。コスト暴走に対しては二段構え: プロンプトの guardrail(検索は合計最大 12 回・<code>max_results</code> ≤ 10・再試行禁止)は<strong>あくまで補助</strong>で、決定的なバックストップは <code>/mcp</code> にあるセッション単位の<strong>ハード呼び出し上限</strong>(<code>AUTH_PROXY_MCP_CALL_CAP</code>)です。上限を超えた <code>tools/call</code> は LLM が何を言おうと弾かれます。</p>
+<p><strong>なぜ事前収集をやめて直結にしたか。</strong> 品質と拡張性です。事前収集では orchestrator が決め打ちのクエリ集合を一度投げるだけでしたが、直結なら Claude が「1 回目の検索結果を見て次のクエリを決める」という反復ができ、拾えるトピックの質が上がります。横展開(投資クラスタなど別ジョブ)も、収集ロジックを Python 側で書き足すのではなく role とプロンプトを足すだけで済みます。一見「LLM に権限を渡した」ように見えますが、第 1 章の<strong>「信頼しない設計」</strong>の観点ではむしろ強化です — 認可判定を orchestrator プロセス内の PreToolUse hook から Go 境界のネットワーク呼び出しへ移したことで、runner 内からの回避が難しくなり、上限も LLM の外側の決定的コードが握ります。プロンプトの「12 回まで」は破られても、<code>AUTH_PROXY_MCP_CALL_CAP</code> は破られません。</p>
+<p><strong>allowedTools は最小構成。</strong> コンテナ内 Claude は <code>Read,Write,WebFetch,Bash(git:*)</code> に上記 4 つの MCP 検索 tool を加えただけで起動します。X を検索し、トピックを選び、WebFetch で一次情報を確認し、日本語で書き、git relay 経由で push する — それ以外の道具はありません。</p>
 <p><strong>検証は clone-back。</strong> 「push しました」という LLM の自己申告は信用せず、orchestrator が relay 経由で notes repo を <code>--depth 1</code> clone し直し、期待パスにファイルが存在して日本語(非 ASCII)を含むことを機械的に確認してから published を記録します。</p>
 <p><strong>日付はレースを潰して 1 回だけ決める。</strong> 地味ですが実際に設計で議論になった点です。日付を使う場所が 3 つ(プロンプト・実行・検証)あるため、実行が日付境界をまたぐと「プロンプトは 7/4 のパスを指示したのに検証は 7/5 のパスを見る」という不一致が起き得ます。対策はコードのコメントがそのまま説明になっています。</p>
 <pre><code class="language-python">    # Compute the target date once, up front: this is the single source of

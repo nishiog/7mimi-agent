@@ -12,9 +12,7 @@ stub HTTP server that mimics the X API v2 /2/tweets/search/recent response
 This proves the Go xmcp server satisfies the Python client's contract, not
 just that each side's own unit tests pass in isolation.
 
-Also verifies collect_signals (runner/claude_digest.py) works end to end
-against the live Go server via X_MCP_URL, and scans a 401 upstream error path
-for token leakage through the real client.
+Also scans a 401 upstream error path for token leakage through the real client.
 
 Skipped entirely if the `go` toolchain is not available.
 """
@@ -36,12 +34,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from shichimimi_agent.config import load_config
-from shichimimi_agent.db import Repository, migrate
 from shichimimi_agent.mcp.client import McpClientError, McpHttpClient
-from shichimimi_agent.proxies.auth_proxy_client import AuthProxyClient
-from shichimimi_agent.runner.claude_digest import collect_signals
-from shichimimi_agent.security.policy_engine import PolicyEngine
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 AUTH_PROXY_DIR = REPO_ROOT / "services" / "auth-proxy"
@@ -228,47 +221,6 @@ class GoXMcpIntegrationTest(unittest.TestCase):
             {"like_count": 5, "repost_count": 2, "reply_count": 1, "quote_count": 0},
         )
         self.assertIn("https://example.com", post["urls"])
-
-    # -- 3. collect_signals (runner/claude_digest.py) against the live server --
-
-    def test_collect_signals_against_live_go_server(self) -> None:
-        root = REPO_ROOT
-        config = load_config(root)
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "app.sqlite"
-            migrate(db_path)
-            repository = Repository(db_path)
-            policy_engine = PolicyEngine(config.policy)
-            auth_client = AuthProxyClient(local_fallback_engine=policy_engine)
-
-            old_url_env = os.environ.get("X_MCP_URL")
-            old_token_env = os.environ.get("X_MCP_SESSION_TOKEN")
-            os.environ["X_MCP_URL"] = self.base_url
-            os.environ["X_MCP_SESSION_TOKEN"] = SESSION_TOKEN
-            try:
-                result = collect_signals(
-                    auth_client=auth_client,
-                    repository=repository,
-                    session_id="sess-integration",
-                    task_id="task-integration",
-                    role="ai_it_topic_runner",
-                    queries=["AI OR IT"],
-                )
-            finally:
-                if old_url_env is None:
-                    os.environ.pop("X_MCP_URL", None)
-                else:
-                    os.environ["X_MCP_URL"] = old_url_env
-                if old_token_env is None:
-                    os.environ.pop("X_MCP_SESSION_TOKEN", None)
-                else:
-                    os.environ["X_MCP_SESSION_TOKEN"] = old_token_env
-
-            self.assertEqual(len(result["queries"]), 1)
-            entry = result["queries"][0]
-            self.assertEqual(len(entry["posts"]), 1)
-            self.assertEqual(entry["posts"][0]["id"], "1001")
-            self.assertEqual(result.get("failed_queries", []), [])
 
     # -- 4. token-leak sentinel scan on error paths via the real client --
 

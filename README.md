@@ -177,6 +177,6 @@ auth-proxy's `/v1/slack/notify` route delivers via the Slack Web API (`chat.post
 
 Leaving either unset keeps `/v1/slack/notify` unmounted and the job unable to publish.
 
-## ai-it digest direct /mcp collection (ADR-028, opt-in)
+## ai-it / invest digest direct /mcp collection (ADR-028)
 
-`claude-digest --direct` (or env `X_MCP_DIRECT=1`) opts the `ai-it-x-daily-digest` job into having Claude Code itself connect to auth-proxy's `/mcp` (Streamable HTTP MCP, `--mcp-config` + `--strict-mcp-config`) and search X directly, instead of the orchestrator pre-collecting signals into `signals.json`. The orchestrator mints a short-lived, role-bound session token via `POST /session/issue` (authenticated with the static `AUTH_PROXY_SESSION_TOKEN`); `/mcp` enforces role×tool authorization and a hard per-token call cap (`AUTH_PROXY_MCP_CALL_CAP`, default 60) server-side, on top of prompt-level search guardrails. Default behavior (env unset) is unchanged. Not yet used for `invest-x-daily-digest`.
+Direct `/mcp` collection is the sole collection flow for both `ai-it-x-daily-digest` and `invest-x-daily-digest`: Claude Code itself connects to auth-proxy's `/mcp` (Streamable HTTP MCP, `--mcp-config` + `--strict-mcp-config`) and searches X directly. There is no orchestrator pre-collection into `signals.json` anymore. The orchestrator mints a short-lived, role-bound session token via `POST /session/issue` (authenticated with the static `AUTH_PROXY_SESSION_TOKEN`); `/mcp` enforces role×tool authorization and a hard per-token call cap (`AUTH_PROXY_MCP_CALL_CAP`, default 60) server-side, on top of prompt-level search guardrails.

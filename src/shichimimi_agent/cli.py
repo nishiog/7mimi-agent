@@ -287,18 +287,10 @@ def cmd_claude_smoke(args: argparse.Namespace) -> int:
 
 
 def cmd_claude_digest(args: argparse.Namespace) -> int:
-    """ADR-021: integrated autonomous digest job (Claude Code in agent-runner + git relay).
-
-    ADR-028: --direct sets X_MCP_DIRECT=1 for this run, opting the ai-it job
-    into Claude Code connecting to auth-proxy's /mcp directly instead of the
-    orchestrator pre-collecting X signals.
-    """
-    import os
-
+    """ADR-021 / ADR-028: integrated autonomous digest job (Claude Code in
+    agent-runner + git relay), collecting X signals itself via auth-proxy's
+    /mcp (direct /mcp is the sole collection flow)."""
     from shichimimi_agent.runner.claude_digest import ClaudeDigestOptions, run_claude_digest
-
-    if getattr(args, "direct", False):
-        os.environ["X_MCP_DIRECT"] = "1"
 
     try:
         config = _load_validated_config(args.root)
@@ -597,12 +589,6 @@ def build_parser() -> argparse.ArgumentParser:
     claude_digest.add_argument("--job", default="ai-it-x-daily-digest")
     claude_digest.add_argument("--model", default=None)
     claude_digest.add_argument("--max-turns", type=int, default=40)
-    claude_digest.add_argument(
-        "--direct",
-        action="store_true",
-        default=False,
-        help="ADR-028: opt into Claude Code connecting to auth-proxy's /mcp directly (X_MCP_DIRECT=1).",
-    )
     claude_digest.set_defaults(func=cmd_claude_digest)
 
     invest_digest = sub.add_parser("invest-digest")
