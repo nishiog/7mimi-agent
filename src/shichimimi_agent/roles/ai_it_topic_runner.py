@@ -41,7 +41,10 @@ class AiItTopicRunner:
         self.repository = repository
         self.policy_engine = policy_engine
         self.auth_client = auth_client or AuthProxyClient(local_fallback_engine=policy_engine)
-        self.writer = DocumentRepositoryWriter(config.root)
+        self.writer = DocumentRepositoryWriter(
+            config.root,
+            document_repositories=(config.policy.get("document_repositories") or {}),
+        )
         self._mcp_client_factory = mcp_client_factory or (lambda base_url: McpHttpClient(base_url=base_url))
 
     def run_daily_digest(self, *, session_id: str, task_id: str, job: dict[str, Any], dry_run: bool = True) -> RunnerResult:
@@ -70,8 +73,15 @@ class AiItTopicRunner:
         if not decision.allowed:
             raise PermissionError(decision.reason)
 
-        # For initial implementation, dry-run writes locally instead of pushing.
-        write_result = self.writer.write_dry_run(relative_path=relative_path, content=markdown)
+        if dry_run:
+            write_result = self.writer.write_dry_run(relative_path=relative_path, content=markdown)
+        else:
+            write_result = self.writer.publish(
+                repo=repo,
+                relative_path=relative_path,
+                content=markdown,
+                commit_message=f"docs: daily AI/IT digest {date.isoformat()} (7mimi-agent)",
+            )
         run_post_tool_use(
             self.repository,
             session_id=session_id,
@@ -91,7 +101,13 @@ class AiItTopicRunner:
             doc_type="ai_it_daily_digest",
             status="draft" if dry_run else "published",
             source_refs=source_refs,
-            metadata={"dry_run": dry_run, "target_repo": repo, "target_path": relative_path},
+            metadata={
+                "dry_run": dry_run,
+                "target_repo": repo,
+                "target_path": relative_path,
+                "pushed": write_result.pushed,
+                "commit_sha": write_result.commit_sha,
+            },
         )
         return RunnerResult(status="succeeded", path=str(write_result.path), title=f"Daily AI/IT Digest - {date.isoformat()}", source_refs=source_refs)
 

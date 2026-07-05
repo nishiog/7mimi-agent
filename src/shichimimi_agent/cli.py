@@ -78,6 +78,9 @@ def _finalize_task(repository: Repository, task: RunnerTask, *, status: str, pay
 
 
 def cmd_run_job(args: argparse.Namespace) -> int:
+    if args.publish and args.runner == "container":
+        print("error: publish is only supported with the local runner (ADR-018)", file=sys.stderr)
+        return 1
     try:
         config = _load_validated_config(args.root)
     except ValueError as exc:
@@ -85,7 +88,8 @@ def cmd_run_job(args: argparse.Namespace) -> int:
         return 1
     migrate(default_db_path(config.root))
     repository = Repository.for_root(config.root)
-    task = _prepare_task(config=config, repository=repository, job_name=args.name, dry_run=args.dry_run, source="cli")
+    effective_dry_run = not args.publish or args.dry_run
+    task = _prepare_task(config=config, repository=repository, job_name=args.name, dry_run=effective_dry_run, source="cli")
 
     if args.runner == "local":
         backend = LocalRunnerBackend(config=config, repository=repository)
@@ -273,6 +277,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_job = sub.add_parser("run-job")
     run_job.add_argument("name")
     run_job.add_argument("--dry-run", action="store_true", default=False)
+    run_job.add_argument(
+        "--publish",
+        action="store_true",
+        default=False,
+        help="Actually commit and push to the notes repo (default is dry-run)",
+    )
     run_job.add_argument("--runner", choices=["local", "container"], default="local")
     run_job.add_argument("--image", default="7mimi-agent-runner:latest")
     run_job.add_argument("--network", default="none")
