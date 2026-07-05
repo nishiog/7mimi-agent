@@ -202,6 +202,21 @@ class ComposeConfigTest(unittest.TestCase):
     def test_scheduler_has_no_published_ports(self) -> None:
         self.assertNotIn("ports", self.compose["services"]["scheduler"])
 
+    def test_scheduler_has_slack_notify_env(self) -> None:
+        """ADR-026: invest-x-daily-digest publishes via auth-proxy's
+        /v1/slack/notify using the same session Bearer as gitrelay/x-mcp."""
+        scheduler_env = self.compose["services"]["scheduler"]["environment"]
+        self.assertEqual(scheduler_env["SLACK_NOTIFY_URL"], "http://auth-proxy:18081")
+        expected = "${AUTH_PROXY_SESSION_TOKEN:?AUTH_PROXY_SESSION_TOKEN is required}"
+        self.assertEqual(scheduler_env["SLACK_NOTIFY_SESSION_TOKEN"], expected)
+
+    def test_auth_proxy_slack_webhook_url_is_optional(self) -> None:
+        """SLACK_WEBHOOK_URL must NOT use the required ${VAR:?...} syntax:
+        an unset value should silently leave /v1/slack/notify unmounted, not
+        fail `docker compose config`."""
+        auth_proxy_env = self.compose["services"]["auth-proxy"]["environment"]
+        self.assertEqual(auth_proxy_env["SLACK_WEBHOOK_URL"], "${SLACK_WEBHOOK_URL:-}")
+
     def test_required_secrets_use_required_var_syntax(self) -> None:
         """Secrets must use ${VAR:?msg} so `docker compose config` fails
         loudly instead of silently starting with an empty/missing value

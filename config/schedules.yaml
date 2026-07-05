@@ -104,6 +104,22 @@ jobs:
       path_template: "daily/{yyyy}/{mm}/{date}.md"
       commit_message_template: "Add AI/IT daily digest for {date}"
 
+  - name: invest-x-daily-digest
+    description: 投資クラスタ(日米株・暗号資産・マクロ)のXシグナルを収集し、Slackへdaily digestを通知する。
+    role: investment_signal_runner
+    enabled: true
+    cron: "0 18 * * *"
+    active_deadline_seconds: 1200
+    inputs:
+      query_set: invest_watch
+    prompt: |
+      投資クラスタ(日米株・暗号資産・マクロ)のXシグナルを収集してください。
+      X投稿はsignalとして扱い、可能な限り一次情報(公式発表・公的統計等)を確認してください。
+      投資助言・売買推奨・断定表現は禁止です。確認済み事実と未確認シグナルを分離してください。
+      Slack mrkdwn形式のdigestを生成し、Slackへ通知してください。
+    output:
+      type: slack
+
 query_sets:
   default_x_watch:
     description: MVP用の仮監視クエリ。実運用前にユーザーと調整する。
@@ -129,3 +145,21 @@ query_sets:
       - "AIエージェント MCP"
       - "コーディングエージェント"
       - "生成AI 開発者ツール"
+
+  invest_watch:
+    description: 投資クラスタ(日米株・暗号資産・マクロ)daily digest runner用の監視クエリ。
+    queries:
+      - "日経平均"
+      - "決算 上方修正"
+      - "半導体 株"
+      - "日銀 利上げ"
+      - "東証 大引け"
+      - "グロース株"
+      - "S&P500"
+      - "FOMC"
+      - "NVDA earnings"
+      - "US CPI inflation"
+      - "Bitcoin ETF"
+      - "Ethereum"
+      - "crypto regulation"
+      - "IPO 上場"

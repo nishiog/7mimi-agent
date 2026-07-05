@@ -44,6 +44,9 @@ services:
       GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:-}
       GITHUB_APP_PRIVATE_KEY_PATH: /secrets/github-app-key.pem
       X_BEARER_TOKEN: ${X_BEARER_TOKEN:?X_BEARER_TOKEN is required}
+      # Optional (ADR-026): unset means /v1/slack/notify stays unmounted and
+      # the invest-x-daily-digest job cannot publish. Never required here.
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
     volumes:
       - ${GITHUB_APP_PRIVATE_KEY_HOST_PATH:?GITHUB_APP_PRIVATE_KEY_HOST_PATH is required}:/secrets/github-app-key.pem:ro
     restart: unless-stopped
@@ -99,6 +102,10 @@ services:
       # only path to the public internet.
       RUNNER_NETWORK: 7mimi-internal
       RUNNER_EGRESS_PROXY: http://egress-proxy:18082
+      # ADR-026: invest-x-daily-digest publishes via auth-proxy's Slack notify
+      # endpoint, using the same session Bearer as gitrelay/x-mcp.
+      SLACK_NOTIFY_URL: http://auth-proxy:18081
+      SLACK_NOTIFY_SESSION_TOKEN: ${AUTH_PROXY_SESSION_TOKEN:?AUTH_PROXY_SESSION_TOKEN is required}
     depends_on:
       claude-proxy:
         condition: service_healthy

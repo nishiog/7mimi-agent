@@ -55,12 +55,14 @@ def cmd_schedule_list(args: argparse.Namespace) -> int:
 def _build_scheduler_executors(config: Any, repository: Repository) -> dict[str, Any]:
     """Wire executors for jobs with an implemented run path (ADR-022).
 
-    Only "ai-it-x-daily-digest" has an executor today (the claude-digest
-    pipeline). Other jobs have no executor and are skipped by the engine.
+    "ai-it-x-daily-digest" (claude-digest pipeline) and "invest-x-daily-digest"
+    (invest-digest pipeline, ADR-026) have executors today. Other jobs have no
+    executor and are skipped by the engine.
     """
     import os
 
     from shichimimi_agent.runner.claude_digest import ClaudeDigestOptions, run_claude_digest
+    from shichimimi_agent.runner.invest_digest import InvestDigestOptions, run_invest_digest
     from shichimimi_agent.sessions.workspace import create_workspace
 
     required_env = [
@@ -70,6 +72,15 @@ def _build_scheduler_executors(config: Any, repository: Repository) -> dict[str,
         "CLAUDE_PROXY_SESSION_TOKEN",
         "GIT_PROXY_URL",
         "GIT_PROXY_SESSION_TOKEN",
+    ]
+
+    invest_required_env = [
+        "X_MCP_URL",
+        "X_MCP_SESSION_TOKEN",
+        "CLAUDE_PROXY_URL",
+        "CLAUDE_PROXY_SESSION_TOKEN",
+        "SLACK_NOTIFY_URL",
+        "SLACK_NOTIFY_SESSION_TOKEN",
     ]
 
     def _run_ai_it_x_daily_digest(job: dict[str, Any]) -> None:
@@ -104,7 +115,42 @@ def _build_scheduler_executors(config: Any, repository: Repository) -> dict[str,
             repository.update_session_status(session_id, "failed")
             raise RuntimeError("claude-digest run failed or verification failed")
 
-    return {"ai-it-x-daily-digest": _run_ai_it_x_daily_digest}
+    def _run_invest_x_daily_digest(job: dict[str, Any]) -> None:
+        missing = [name for name in invest_required_env if not os.environ.get(name)]
+        if missing:
+            raise RuntimeError(f"required env missing: {', '.join(missing)}")
+
+        role = job["role"]
+        role_config = ((config.roles or {}).get("roles") or {}).get(role) or {}
+        model = resolve_model(role_config, config.policy)
+
+        session_id = repository.create_session(source="scheduler", role=role, workspace_path="")
+        workspace = create_workspace(config.root, session_id)
+        repository.update_session_status(session_id, "running")
+        task_id = repository.create_task(session_id=session_id, role=role, input_data={"job": job})
+
+        result = run_invest_digest(
+            config=config,
+            repository=repository,
+            session_id=session_id,
+            task_id=task_id,
+            workspace=workspace,
+            job=job,
+            options=InvestDigestOptions(model=model),
+        )
+
+        if result.exit_code == 0:
+            repository.finish_task(task_id, status="succeeded", output={"chunks": result.chunks, "chars": result.chars})
+            repository.update_session_status(session_id, "stopped")
+        else:
+            repository.finish_task(task_id, status="failed", error={"type": "InvestDigestError", "message": "digest run or slack notify failed"})
+            repository.update_session_status(session_id, "failed")
+            raise RuntimeError("invest-digest run failed or slack notify failed")
+
+    return {
+        "ai-it-x-daily-digest": _run_ai_it_x_daily_digest,
+        "invest-x-daily-digest": _run_invest_x_daily_digest,
+    }
 
 
 def cmd_schedule_run(args: argparse.Namespace) -> int:
@@ -293,6 +339,59 @@ def cmd_claude_digest(args: argparse.Namespace) -> int:
     return 0 if result.exit_code == 0 else 1
 
 
+def cmd_invest_digest(args: argparse.Namespace) -> int:
+    """ADR-026: investment-cluster digest job (Claude Code in agent-runner + Slack notify)."""
+    from shichimimi_agent.runner.invest_digest import InvestDigestOptions, run_invest_digest
+
+    try:
+        config = _load_validated_config(args.root)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    migrate(default_db_path(config.root))
+    repository = Repository.for_root(config.root)
+
+    try:
+        job = _find_job(config, args.job)
+    except KeyError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    role = job["role"]
+    role_config = ((config.roles or {}).get("roles") or {}).get(role) or {}
+    model = args.model or resolve_model(role_config, config.policy)
+
+    session_id = repository.create_session(source="invest-digest", role=role, workspace_path="")
+    workspace = create_workspace(config.root, session_id)
+    repository.update_session_status(session_id, "running")
+    task_id = repository.create_task(session_id=session_id, role=role, input_data={"job": job})
+
+    result = run_invest_digest(
+        config=config,
+        repository=repository,
+        session_id=session_id,
+        task_id=task_id,
+        workspace=workspace,
+        job=job,
+        options=InvestDigestOptions(model=model, max_turns=args.max_turns),
+    )
+
+    if result.exit_code == 0:
+        repository.finish_task(task_id, status="succeeded", output={"chunks": result.chunks, "chars": result.chars})
+        repository.update_session_status(session_id, "stopped")
+    else:
+        repository.finish_task(task_id, status="failed", error={"type": "InvestDigestError", "message": "digest run or slack notify failed"})
+        repository.update_session_status(session_id, "failed")
+
+    print(json.dumps({
+        "exit_code": result.exit_code,
+        "published": result.published,
+        "chunks": result.chunks,
+        "chars": result.chars,
+    }, ensure_ascii=False, indent=2))
+    return 0 if result.exit_code == 0 else 1
+
+
 def cmd_research_stock(args: argparse.Namespace) -> int:
     print("stock research runner is not implemented yet; planned for Phase D5")
     print(json.dumps({"ticker": args.ticker, "dry_run": args.dry_run, "status": "not_implemented"}, ensure_ascii=False, indent=2))
@@ -459,6 +558,12 @@ def build_parser() -> argparse.ArgumentParser:
     claude_digest.add_argument("--model", default=None)
     claude_digest.add_argument("--max-turns", type=int, default=40)
     claude_digest.set_defaults(func=cmd_claude_digest)
+
+    invest_digest = sub.add_parser("invest-digest")
+    invest_digest.add_argument("--job", default="invest-x-daily-digest")
+    invest_digest.add_argument("--model", default=None)
+    invest_digest.add_argument("--max-turns", type=int, default=40)
+    invest_digest.set_defaults(func=cmd_invest_digest)
 
     stock = sub.add_parser("research-stock")
     stock.add_argument("ticker")

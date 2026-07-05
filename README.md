@@ -158,3 +158,15 @@ Notes:
 - claude-proxy and auth-proxy publish `18080`/`18081` on the host for local/dev use; the scheduler and agent-runner containers reach all three proxies by service name (`claude-proxy`, `auth-proxy`, `egress-proxy`) over the internal Docker network `7mimi-internal`, not `host.docker.internal`.
 - These host ports are bound on all interfaces (not just loopback) for local dev access; the only defense against LAN access is the session Bearer token, so on untrusted networks block `18080`/`18081` with the host firewall.
 - Stop the stack with `docker compose down`; it does not remove `.data/`, `.sessions/`, or agent-runner images.
+
+## Investment-cluster digest (ADR-026)
+
+`invest-x-daily-digest` (role `investment_signal_runner`, cron `0 18 * * *` JST) collects日米株・暗号資産・マクロ signals from X and publishes a Japanese Slack-mrkdwn digest via auth-proxy's `POST /v1/slack/notify` — it never pushes to the notes repo. The runner container only gets `Read,Write,WebFetch` (no git relay, no Slack credential); the orchestrator authorizes the `slack.post_digest` tool call, appends a deterministic investment-advice disclaimer footer, then hands the text to `SlackNotifyClient`, which posts it through auth-proxy (the only holder of `SLACK_WEBHOOK_URL`, chunked ≤3500 chars on line boundaries).
+
+```bash
+# requires X_MCP_URL/X_MCP_SESSION_TOKEN, CLAUDE_PROXY_URL/CLAUDE_PROXY_SESSION_TOKEN,
+# SLACK_NOTIFY_URL/SLACK_NOTIFY_SESSION_TOKEN (set automatically by docker-compose.yml)
+PYTHONPATH=src python3 -m shichimimi_agent invest-digest --job invest-x-daily-digest
+```
+
+Set `SLACK_WEBHOOK_URL` in `.env` to enable auth-proxy's `/v1/slack/notify` route; leaving it unset keeps the route unmounted and the job unable to publish.

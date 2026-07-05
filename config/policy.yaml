@@ -301,6 +301,22 @@ role_tool_policy:
       - document.write_markdown
       - trading.*
 
+  investment_signal_runner:
+    allow:
+      - x.search_posts_recent
+      - slack.post_digest
+    deny:
+      - x.create_post
+      - x.like_post
+      - x.repost
+      - x.follow_user
+      - x.send_dm
+      - jquants.*
+      - trading.*
+      - document.write_markdown
+      - document.write_outside_workspace
+      - document.delete_recursive
+
 command_policy:
   # For future shell tool. MVP should avoid generic shell where possible.
   default_shell_access: deny

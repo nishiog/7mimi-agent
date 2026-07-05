@@ -237,16 +237,13 @@ def build_docker_command(
     role: str,
     prompt: str,
     options: ClaudeDigestOptions,
+    allowed_tools: str = DEFAULT_ALLOWED_TOOLS,
+    include_git_relay: bool = True,
 ) -> list[str]:
     claude_proxy_url = os.environ.get("CLAUDE_PROXY_URL")
     session_token = os.environ.get("CLAUDE_PROXY_SESSION_TOKEN")
     if not claude_proxy_url or not session_token:
         raise ValueError("CLAUDE_PROXY_URL and CLAUDE_PROXY_SESSION_TOKEN are required for claude-digest")
-
-    git_proxy_url = os.environ.get("GIT_PROXY_URL")
-    git_proxy_session_token = os.environ.get("GIT_PROXY_SESSION_TOKEN")
-    if not git_proxy_url or not git_proxy_session_token:
-        raise ValueError("GIT_PROXY_URL and GIT_PROXY_SESSION_TOKEN are required for claude-digest")
 
     env = {
         "SESSION_ID": session_id,
@@ -259,12 +256,23 @@ def build_docker_command(
         "HOME": "/workspace",
         "DISABLE_TELEMETRY": "1",
         "DISABLE_ERROR_REPORTING": "1",
-        "GIT_AUTHOR_NAME": GIT_AUTHOR_NAME,
-        "GIT_AUTHOR_EMAIL": GIT_AUTHOR_EMAIL,
-        "GIT_COMMITTER_NAME": GIT_AUTHOR_NAME,
-        "GIT_COMMITTER_EMAIL": GIT_AUTHOR_EMAIL,
     }
-    env.update(build_git_relay_env(proxy_url=git_proxy_url, session_token=git_proxy_session_token))
+
+    if include_git_relay:
+        git_proxy_url = os.environ.get("GIT_PROXY_URL")
+        git_proxy_session_token = os.environ.get("GIT_PROXY_SESSION_TOKEN")
+        if not git_proxy_url or not git_proxy_session_token:
+            raise ValueError("GIT_PROXY_URL and GIT_PROXY_SESSION_TOKEN are required for claude-digest")
+
+        env.update(
+            {
+                "GIT_AUTHOR_NAME": GIT_AUTHOR_NAME,
+                "GIT_AUTHOR_EMAIL": GIT_AUTHOR_EMAIL,
+                "GIT_COMMITTER_NAME": GIT_AUTHOR_NAME,
+                "GIT_COMMITTER_EMAIL": GIT_AUTHOR_EMAIL,
+            }
+        )
+        env.update(build_git_relay_env(proxy_url=git_proxy_url, session_token=git_proxy_session_token))
 
     # ADR-025: when the scheduler runs inside the docker-compose resident
     # stack, RUNNER_NETWORK points at the Docker-internal network so the
@@ -316,7 +324,7 @@ def build_docker_command(
         "-p",
         prompt,
         "--allowedTools",
-        DEFAULT_ALLOWED_TOOLS,
+        allowed_tools,
         "--max-turns",
         str(options.max_turns),
         "--output-format",

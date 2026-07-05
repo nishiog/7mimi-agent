@@ -11,6 +11,7 @@ import (
 	"github.com/7milch/7mimi-agent/services/auth-proxy/internal/githubapp"
 	"github.com/7milch/7mimi-agent/services/auth-proxy/internal/gitrelay"
 	"github.com/7milch/7mimi-agent/services/auth-proxy/internal/policy"
+	"github.com/7milch/7mimi-agent/services/auth-proxy/internal/slacknotify"
 	"github.com/7milch/7mimi-agent/services/auth-proxy/internal/tools"
 	"github.com/7milch/7mimi-agent/services/auth-proxy/internal/xmcp"
 )
@@ -58,6 +59,7 @@ func main() {
 	mux.Handle("/", handler.Routes())
 	mountGitRelay(mux, logger)
 	mountXMCP(mux, logger)
+	mountSlackNotify(mux, logger)
 
 	log.Printf("auth-proxy listening on %s", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
@@ -113,4 +115,28 @@ func mountXMCP(mux *http.ServeMux, logger *audit.Logger) {
 		return
 	}
 	mux.Handle("/mcp", handler.Routes())
+}
+
+// mountSlackNotify mounts POST /v1/slack/notify (ADR-026) only when both
+// AUTH_PROXY_SESSION_TOKEN and SLACK_WEBHOOK_URL are configured; otherwise it
+// logs a non-sensitive reason and leaves the route unmounted. SLACK_WEBHOOK_URL
+// is optional at the platform level (the investment digest job is opt-in).
+func mountSlackNotify(mux *http.ServeMux, logger *audit.Logger) {
+	sessionToken := os.Getenv("AUTH_PROXY_SESSION_TOKEN")
+	webhookURL := os.Getenv("SLACK_WEBHOOK_URL")
+	if sessionToken == "" {
+		log.Printf("slack-notify disabled: no session token configured")
+		return
+	}
+	if webhookURL == "" {
+		log.Printf("slack-notify disabled: SLACK_WEBHOOK_URL not set")
+		return
+	}
+
+	handler, err := slacknotify.NewHandler(sessionToken, webhookURL, logger)
+	if err != nil {
+		log.Printf("slack-notify disabled: handler construction failed")
+		return
+	}
+	mux.Handle("/v1/slack/notify", handler.Routes())
 }
