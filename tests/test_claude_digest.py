@@ -81,7 +81,7 @@ class CollectSignalsTest(unittest.TestCase):
 
     def test_collects_for_all_queries(self) -> None:
         queries = self._queries()
-        self.assertEqual(len(queries), 12)
+        self.assertEqual(len(queries), 18)
         posts_by_query = {q: [_post(f"{i}")] for i, q in enumerate(queries)}
         fake_client = FakeMcpClient("http://x-mcp.local", posts_by_query=posts_by_query)
         os.environ["X_MCP_URL"] = "http://x-mcp.local"
@@ -337,6 +337,9 @@ class BuildDigestPromptTest(unittest.TestCase):
         self.assertIn("evidence として扱わない", prompt)
         self.assertIn("投資助言を書かない", prompt)
         self.assertIn("大量転載をしない", prompt)
+        self.assertIn("Tips & 実用例", prompt)
+        self.assertIn("エンゲージメント数は不問", prompt)
+        self.assertIn("(未検証)", prompt)
         # The concrete, orchestrator-computed target path must be embedded
         # directly rather than left to the container to derive "today JST"
         # itself, which would race a date rollover mid-run.

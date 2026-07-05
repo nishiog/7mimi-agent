@@ -145,6 +145,12 @@ query_sets:
       - "AIエージェント MCP"
       - "コーディングエージェント"
       - "生成AI 開発者ツール"
+      - '"Claude Code" tips'
+      - '"claude skills"'
+      - '"CLAUDE.md"'
+      - "Claude Code 設定"
+      - "Claude Code 便利"
+      - '"Claude Code" プラグイン'
 
   invest_watch:
     description: 投資クラスタ(日米株・暗号資産・マクロ)daily digest runner用の監視クエリ。

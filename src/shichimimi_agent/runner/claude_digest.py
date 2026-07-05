@@ -221,6 +221,9 @@ def build_digest_prompt(*, notes_repo: str, target_relative_path: str, git_proxy
    - X ポストは signal であり、evidence として扱わないこと。一次情報の URL と X ポストの URL を区別して明記すること。
    - 投資助言を書かないこと。
    - ポスト本文の大量転載をしないこと(要約・引用は短く)。
+   - digest に必ず「## Tips & 実用例」セクションを含めること。5〜10 件の短いアイテム(各 1〜2 行: 要約+ポスト URL、コマンド・設定・ファイル名は `コード表記`)で構成すること。
+   - 選定基準: 「今日試せる」具体性(コマンド例・設定・skill/プラグインの実使用レポート・Claude 新機能の実用例)と新規性を優先し、エンゲージメント数は不問とすること。
+   - 自分で動作検証していないものには「(未検証)」を付けること。
 4. 以下の手順で公開してください:
    - `git clone {git_proxy_url.rstrip('/')}/git/{notes_repo}.git notes`
    - `notes/{target_relative_path}` に digest を保存(このパスは orchestrator が確定させた対象日付のパスです。別の日付のパスを使わないでください)
