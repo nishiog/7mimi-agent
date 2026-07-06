@@ -12,8 +12,9 @@ defaults:
 jobs:
   - name: x-signal-collector
     description: XからAI Agent/日本株関連のsignalを収集しresearch_queueへ登録する。
+    # コスト削減(2026-07-06): */30 × 4クエリ = 1日128 X検索と高額かつ digest と内容重複のため無効化。
     role: x_collector
-    enabled: true
+    enabled: false
     cron: "*/30 8-23 * * *"
     active_deadline_seconds: 600
     inputs:
@@ -83,9 +84,10 @@ jobs:
 
   - name: ai-it-x-daily-digest
     description: XからAI/IT関連Topicを収集し、専用docs repoへdaily digestをpushする。
+    # コスト削減(2026-07-06): 毎日→週2回(月・木 8:00 JST)。
     role: ai_it_topic_runner
     enabled: true
-    cron: "0 8 * * *"
+    cron: "0 8 * * 1,4"
     active_deadline_seconds: 1200
     inputs:
       query_set: ai_it_watch
@@ -106,8 +108,9 @@ jobs:
 
   - name: invest-x-daily-digest
     description: 投資クラスタ(日米株・暗号資産・マクロ)のXシグナルを収集し、Slackへdaily digestを通知する。
+    # コスト削減(2026-07-06): 自動発火を停止。必要時に `invest-digest` を手動 kick する。
     role: investment_signal_runner
-    enabled: true
+    enabled: false
     cron: "0 18 * * *"
     active_deadline_seconds: 1200
     inputs:
