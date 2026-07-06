@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CLAUDE.md と .claude/ を読む — AIエージェントに開発を委ねる仕組みの解説</title>
+<style>
+  :root {
+    --fg: #1a1f27; --bg: #ffffff; --muted: #5b6472; --accent: #6a3fb0;
+    --card: #f6f5fa; --border: #ddd8e6; --code-bg: #f4f4f8; --code-fg: #24292f;
+    --kw: #b3005a; --str: #0a7d3f; --com: #6a7480; --num: #8a4b00;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg: #e6e4ee; --bg: #16121e; --muted: #a29ab2; --accent: #b18cf0;
+            --card: #201a2c; --border: #352c46; --code-bg: #1c1728; --code-fg: #d8d4e0;
+            --kw: #ff86b8; --str: #7fd69a; --com: #8d8398; --num: #e0a06a; }
+  }
+  :root[data-theme="dark"] {
+    --fg: #e6e4ee; --bg: #16121e; --muted: #a29ab2; --accent: #b18cf0;
+    --card: #201a2c; --border: #352c46; --code-bg: #1c1728; --code-fg: #d8d4e0;
+    --kw: #ff86b8; --str: #7fd69a; --com: #8d8398; --num: #e0a06a;
+  }
+  :root[data-theme="light"] {
+    --fg: #1a1f27; --bg: #ffffff; --muted: #5b6472; --accent: #6a3fb0;
+    --card: #f6f5fa; --border: #ddd8e6; --code-bg: #f4f4f8; --code-fg: #24292f;
+    --kw: #b3005a; --str: #0a7d3f; --com: #6a7480; --num: #8a4b00;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 0 1.3rem 5rem; background: var(--bg); color: var(--fg);
+         font-family: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
+         line-height: 1.95; font-size: 16.5px; }
+  main { max-width: 780px; margin: 0 auto; }
+  h1 { font-size: 1.58rem; line-height: 1.5; margin: 2.8rem 0 1.4rem; font-weight: 700;
+       border-bottom: 3px double var(--border); padding-bottom: 1rem; }
+  h2 { font-size: 1.3rem; margin-top: 3.4rem; padding: .4rem 0 .35rem .7rem;
+       border-left: 5px solid var(--accent); background: var(--card); }
+  h3 { font-size: 1.08rem; margin-top: 2.4rem; color: var(--accent); font-weight: 700; }
+  p { margin: 1rem 0; text-align: justify; }
+  a { color: var(--accent); }
+  .lead { color: var(--muted); }
+  ul, ol { padding-left: 1.5rem; }
+  li { margin: .4rem 0; }
+  code { font-family: "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+         font-size: .85em; background: var(--code-bg); padding: .1em .38em; border-radius: 4px;
+         color: var(--code-fg); }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+        padding: 1rem 1.1rem; overflow-x: auto; margin: 1.4rem 0; line-height: 1.7; }
+  pre code { background: none; padding: 0; font-size: 13.5px; }
+  table { border-collapse: collapse; width: 100%; margin: 1.4rem 0; display: block; overflow-x: auto;
+          font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; font-size: .92rem; }
+  th, td { border: 1px solid var(--border); padding: .5rem .8rem; text-align: left; vertical-align: top; }
+  th { background: var(--card); }
+  .toc { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+         padding: 1rem 1.4rem; margin: 2rem 0;
+         font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; font-size: .95rem; }
+  .toc ol { padding-left: 1.3rem; } .toc li { margin: .25rem 0; }
+  .toc a { text-decoration: none; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 3rem 0; }
+  strong { font-weight: 700; }
+  .k { color: var(--kw); } .s { color: var(--str); } .c { color: var(--com); font-style: italic; }
+  .theme-toggle { position: fixed; top: .8rem; right: .8rem; background: var(--card);
+    border: 1px solid var(--border); color: var(--fg); border-radius: 6px; padding: .3rem .6rem;
+    font-size: .8rem; cursor: pointer; font-family: sans-serif; }
+  figure { margin: 1.8rem 0; }
+  .mermaid { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1.1rem; margin: 0; overflow-x: auto; text-align: center;
+    font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  figcaption { font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; font-size: .85rem;
+    color: var(--muted); text-align: center; margin-top: .5rem; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" onclick="(function(){var r=document.documentElement;var d=(r.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'))==='dark';r.setAttribute('data-theme',d?'light':'dark');})()">◐ 表示切替</button>
+<main>
+
+<h1>CLAUDE.md と .claude/ を読む<br><span style="font-size:.72em;font-weight:400;color:var(--muted)">— AIエージェントに開発を委ねる仕組みの解説 —</span></h1>
+
+<p class="lead">本書は、7mimi-agent リポジトリの <code>CLAUDE.md</code> と <code>.claude/</code> ディレクトリを題材に、「AIコーディングエージェント(Claude Code)に開発作業そのものを委ねる」仕組みがどのように構成されているかを解説するものである。Claude Code の設定ファイルを触ったことのない読者を想定し、実際のファイルを引用しながら、一つずつ意味を確認していく。口語的な読み物ではなく、順を追って理解を積み上げる教科書として記述する。</p>
+
+<div class="toc">
+<strong>目次</strong>
+<ol>
+<li><a href="#c1">第1章 準備 — なぜ設定でAIを制御するのか</a></li>
+<li><a href="#c2">第2章 CLAUDE.md — プロジェクトの憲法</a></li>
+<li><a href="#c3">第3章 .claude/agents/ — 専門役割のサブエージェント</a></li>
+<li><a href="#c4">第4章 .claude/skills/ — 定型ワークフロー</a></li>
+<li><a href="#c5">第5章 .claude/hooks/ — 完了を止めるフック</a></li>
+<li><a href="#c6">第6章 全体像 — 設定が形づくる開発の流れ</a></li>
+</ol>
+</div>
+
+<hr>
+
+<h2 id="c1">第1章 準備 — なぜ設定でAIを制御するのか</h2>
+
+<h3>1.1 Claude Code とは何か</h3>
+<p>Claude Code は、Anthropic が提供するコマンドライン型のAIコーディングエージェントである。人間が自然言語で指示を与えると、ファイルの読み書き、コマンドの実行、テストの実施といった作業を、エージェントが自ら判断して進める。</p>
+<p>ここで問題になるのが、エージェントの振る舞いをどう方向づけるかである。毎回すべてを口頭で指示するのは非効率であり、指示のばらつきも生む。そこで Claude Code は、リポジトリの中に置かれた<strong>設定ファイル</strong>を読み込み、その内容に従って振る舞う。設定ファイルは大きく2種類ある。</p>
+<ul>
+<li><strong><code>CLAUDE.md</code></strong>: プロジェクトの決まりごとを自然言語で記述する指示書。エージェントは作業前にこれを読む。</li>
+<li><strong><code>.claude/</code> ディレクトリ</strong>: スキル(定型ワークフロー)、サブエージェント(専門役割)、フック(自動介入)、設定を格納する。</li>
+</ul>
+
+<figure>
+<div class="mermaid">
+flowchart TB
+  H["人間の指示&lt;br/&gt;(自然言語)"] --&gt; AI["Claude Code&lt;br/&gt;(オーケストレーター)"]
+  subgraph cfg["リポジトリ内の設定"]
+    CM["CLAUDE.md&lt;br/&gt;決まりごと"]
+    SK[".claude/skills/&lt;br/&gt;定型ワークフロー"]
+    AG[".claude/agents/&lt;br/&gt;専門役割"]
+    HK[".claude/hooks/&lt;br/&gt;自動介入"]
+  end
+  CM -.読み込む.-&gt; AI
+  SK -.起動.-&gt; AI
+  AG -.委譲先.-&gt; AI
+  HK -.完了時に検査.-&gt; AI
+</div>
+<figcaption>図1-1 Claude Code と設定ファイルの関係。エージェントの振る舞いは4種類の設定で方向づけられる。</figcaption>
+</figure>
+
+<h3>1.2 本書で使う用語</h3>
+<p>以下の用語を先に定義する。いずれも後の章で実例とともに再確認する。</p>
+<ul>
+<li><strong>スキル(skill)</strong>: 名前を付けて呼び出せる定型ワークフロー。<code>/next-task</code> のようにスラッシュコマンドとして起動する。</li>
+<li><strong>サブエージェント(subagent)</strong>: 特定の役割に特化した別のエージェント。メインのエージェント(オーケストレーター)が仕事を委譲する相手。</li>
+<li><strong>フック(hook)</strong>: エージェントの動作の特定の瞬間に自動で割り込むプログラム。本書では「作業を完了しようとした瞬間」に走るフックを扱う。</li>
+<li><strong>オーケストレーター</strong>: 人間と会話し、全体を統括するメインのエージェント。サブエージェントに作業を割り振り、結果を束ねる。</li>
+<li><strong>フロントマター(front matter)</strong>: Markdownファイル冒頭の <code>---</code> で囲まれた領域。ファイルの設定を機械可読な形で記述する。</li>
+<li><strong>ADR(Architecture Decision Record)</strong>: アーキテクチャ上の決定を記録した文書。「なぜこう決めたか」を残す。</li>
+</ul>
+
+<hr>
+
+<h2 id="c2">第2章 CLAUDE.md — プロジェクトの憲法</h2>
+
+<h3>2.1 CLAUDE.md の位置づけ</h3>
+<p><code>CLAUDE.md</code> は、リポジトリのルートに置かれる、エージェント向けの指示書である。Claude Code はセッション開始時にこれを読み込み、記述された決まりごとを作業全体に適用する。人間の新規参加者に渡す「開発ガイド」に相当するが、読者が人間ではなくAIである点が異なる。</p>
+<p>7mimi-agent の <code>CLAUDE.md</code> は約130行で、次の要素で構成される。</p>
+<ul>
+<li>リポジトリの共通コマンド(テストの実行方法、設定検証の方法など)</li>
+<li>アーキテクチャの要点(ディレクトリ構造、設計の中心原則)</li>
+<li>仕様駆動開発のルール</li>
+<li>ADR 記録の規律</li>
+<li>スキルとサブエージェントの使い方、委譲のルール</li>
+</ul>
+<p>このうち、本書のテーマである「AIに開発を委ねる仕組み」に直結するのが、後半の3つ — 仕様駆動開発、ADR規律、委譲ルール — である。以下ではこれらを詳しく読む。</p>
+
+<h3>2.2 仕様駆動開発のルール</h3>
+<p><code>CLAUDE.md</code> は、実装の進め方について次のように定める(原文を引用する)。</p>
+<pre><code><span class="c">Docs under `docs/` are the spec; implement according to them, not ad hoc.
+Before implementing, check the relevant sections of `docs/architecture/`,
+`docs/detailed-design/`, `docs/workflows/` and the latest ADRs in
+`docs/planning/adr.md`. If a recent ADR contradicts the older design docs,
+**update the design docs first** to reflect the ADR, then implement against
+the updated docs.</span></code></pre>
+<p>要点は3つである。</p>
+<p>第一に、<strong><code>docs/</code> 配下の設計文書が「仕様」であり、その場の思いつき(ad hoc)で実装してはならない</strong>。エージェントは実装前に、関連する設計文書と最新のADRを確認する義務を負う。</p>
+<p>第二に、<strong>最新のADRが古い設計文書と矛盾する場合は、先に設計文書をADRに合わせて更新してから実装する</strong>。これは「コードと文書の乖離」を防ぐための順序の指定である。矛盾を放置したまま実装すると、次にその文書を読むエージェントが古い前提で動いてしまう。</p>
+<p>この規律により、エージェントの実装は「毎回ゼロから判断する」のではなく、「文書化された決定の上に積み上げる」ものになる。判断のばらつきが抑えられ、複数のセッションをまたいでも一貫性が保たれる。</p>
+
+<h3>2.3 ADR記録の規律</h3>
+<p><code>CLAUDE.md</code> は、設計上の決定を必ずADRとして記録することを求める。</p>
+<pre><code><span class="c">Any change that alters architecture, security boundaries, language/tooling
+choices, or platform policy **must** be recorded as an ADR in
+`docs/planning/adr.md` **in the same work session** (append-only, numbered
+sequentially). ... A Stop hook (`.claude/hooks/adr-check.sh`) blocks
+completion when those paths changed without an `adr.md` update.</span></code></pre>
+<p>ここで注目すべきは、この規律が<strong>単なるお願いではなく、フックによって機械的に強制される</strong>点である。文中に「A Stop hook ... blocks completion(Stopフックが完了をブロックする)」とある。設計に関わるファイル(<code>docs/architecture/</code> など、<code>config/*.yaml</code>)を変更したのにADRを更新していなければ、エージェントは作業を完了できない。このフックの中身は第5章で読む。</p>
+<p>ADRは追記のみ(append-only)で、番号は連番で振る。過去の決定を書き換えるのではなく、新しい決定を末尾に足していく。これにより「いつ・なぜ・何を決めたか」の履歴がそのまま残る。第2.2節の仕様駆動開発と合わせると、「決定はADRに残し、実装は文書に従う」という循環が成立する。</p>
+
+<figure>
+<div class="mermaid">
+flowchart LR
+  D["設計判断"] --&gt; ADR["ADRに記録&lt;br/&gt;(追記のみ・連番)"]
+  ADR --&gt; DOC["設計文書 docs/ に反映"]
+  DOC --&gt; IMPL["文書に従って実装"]
+  IMPL --&gt; D2["新たな判断が生じる"]
+  D2 --&gt; ADR
+</div>
+<figcaption>図2-1 仕様駆動とADR規律の循環。決定はADRに残り、実装は文書に従い、新たな決定がまたADRに積まれる。</figcaption>
+</figure>
+
+<h3>2.4 委譲ルール — 誰が何をするか</h3>
+<p><code>CLAUDE.md</code> は、開発作業を複数の役割に分担する方法を定める。</p>
+<pre><code><span class="c">- **Implementation loop**: implementer -&gt; tester -&gt; reviewer. Repeat until the
+  tester returns `SUCCESS` **and** the reviewer returns `APPROVE`. Any
+  `SPEC-ISSUE` verdict stops the loop and escalates to the user.
+- **Doc updates go through doc-updater**: the orchestrator decides the exact
+  content first, then hands doc-updater concrete instructions. doc-updater
+  records decisions; it never makes them.
+- Subagents must not spawn further subagents; only the orchestrator delegates.</span></code></pre>
+<p>3つのルールが述べられている。</p>
+<p>第一の<strong>実装ループ</strong>は本書の中心概念である。実装は「implementer(実装)→ tester(テスト)→ reviewer(レビュー)」の順で進み、テスターが <code>SUCCESS</code> を、レビュアーが <code>APPROVE</code> を返すまで繰り返す。どちらかが仕様の欠陥(<code>SPEC-ISSUE</code>)を報告したら、ループを止めて人間に判断を仰ぐ。これらの役割は第3章で読むサブエージェントである。</p>
+<p>第二の<strong>文書更新は doc-updater を通す</strong>。ただし重要な但し書きがある。「オーケストレーターが正確な内容を先に決め、doc-updater には具体的な指示を渡す。doc-updater は決定を記録するのであって、決定を下さない」。文書を書く役割と、内容を決める役割を分離している。</p>
+<p>第三に、<strong>サブエージェントはさらにサブエージェントを生成できない</strong>。委譲できるのはオーケストレーターだけである。これは制御の階層を平坦に保ち、誰が誰に指示したかを追いやすくするための制約である。</p>
+
+<figure>
+<div class="mermaid">
+flowchart TB
+  H["人間"] &lt;--&gt; O["オーケストレーター&lt;br/&gt;(統括)"]
+  O --&gt; PM["product-manager&lt;br/&gt;スコープ判断"]
+  O --&gt; TL["tech-lead&lt;br/&gt;技術判断"]
+  O --&gt; I["implementer&lt;br/&gt;実装"]
+  O --&gt; T["tester&lt;br/&gt;テスト"]
+  O --&gt; R["reviewer&lt;br/&gt;レビュー"]
+  O --&gt; DU["doc-updater&lt;br/&gt;記録"]
+  I -.SUCCESS/APPROVE まで.-&gt; T -.-&gt; R -.-&gt; O
+</div>
+<figcaption>図2-2 委譲の構造。統括役だけが委譲でき、実装は implementer→tester→reviewer のループで進む。</figcaption>
+</figure>
+
+<hr>
+
+<h2 id="c3">第3章 .claude/agents/ — 専門役割のサブエージェント</h2>
+
+<h3>3.1 サブエージェントの定義形式</h3>
+<p><code>.claude/agents/</code> には、6つのサブエージェントがそれぞれ1つのMarkdownファイルとして定義されている。ファイルは「フロントマター(設定)」と「本文(役割の指示)」で構成される。まず implementer の定義を見る。</p>
+<pre><code>---
+<span class="k">name</span>: implementer
+<span class="k">description</span>: Implements code based on specifications.
+<span class="k">model</span>: sonnet
+<span class="k">disallowedTools</span>: Agent
+---
+You are a Software Engineer responsible for implementation (Implementer Agent).
+Based on the provided specification (Spec) or task, implement clean and highly
+maintainable code.</code></pre>
+<p><code>---</code> で囲まれた領域がフロントマターである。各項目の意味は次のとおりである。</p>
+<ul>
+<li><code>name</code>: エージェントの名前。オーケストレーターがこの名前で呼び出す。</li>
+<li><code>description</code>: 役割の要約。どの場面でこのエージェントを使うかの判断材料になる。</li>
+<li><code>model</code>: このエージェントが使う言語モデル。implementer は <code>sonnet</code> を使う。</li>
+<li><code>disallowedTools: Agent</code>: このエージェントが使えないツールの指定。<code>Agent</code>(サブエージェントの起動)を禁じている。これが第2.4節の「サブエージェントはさらにサブエージェントを生成できない」を機械的に実現している。</li>
+</ul>
+<p>フロントマターの下の本文が、そのエージェントに与えられる役割の指示である。implementer の本文は「仕様に基づいてクリーンで保守性の高いコードを実装せよ」と述べる。</p>
+
+<h3>3.2 モデルの使い分け</h3>
+<p>6つのエージェントは、役割の性質に応じてモデルを使い分けている。フロントマターの <code>model</code> を並べると次のようになる。</p>
+<table>
+<tr><th>エージェント</th><th>モデル</th><th>役割</th></tr>
+<tr><td>implementer</td><td>sonnet</td><td>仕様に基づくコード実装</td></tr>
+<tr><td>tester</td><td>sonnet</td><td>テストの作成・実行</td></tr>
+<tr><td>doc-updater</td><td>sonnet</td><td>文書・ADRの記録</td></tr>
+<tr><td>reviewer</td><td>opus</td><td>品質・セキュリティ・アーキテクチャのレビュー</td></tr>
+<tr><td>tech-lead</td><td>opus</td><td>アーキテクチャ・技術選定の判断</td></tr>
+<tr><td>product-manager</td><td>opus</td><td>スコープ・ユーザー価値の判断</td></tr>
+</table>
+<p>原則が読み取れる。<strong>手を動かす作業(実装・テスト・記録)は sonnet、判断を要する作業(レビュー・技術判断・スコープ判断)は opus</strong> を割り当てている。判断の質が結果を左右する役割ほど、能力の高いモデルを充てる設計である。これはコストと品質の釣り合いを取るための配分でもある。</p>
+
+<h3>3.3 判定を返す役割 — tester と reviewer</h3>
+<p>実装ループ(第2.4節)を成立させているのが、tester と reviewer が返す明確な<strong>判定(verdict)</strong>である。tester はテスト実行後に定型の判定を返す。</p>
+<ul>
+<li><code>[TEST-EXECUTION]: SUCCESS</code> — テスト成功</li>
+<li><code>[TEST-EXECUTION]: FAIL</code> — テスト失敗(implementer に修正を戻す)</li>
+<li><code>[TEST-EXECUTION]: SPEC-ISSUE</code> — 仕様自体の問題(ループを止めて人間へ)</li>
+</ul>
+<p>reviewer も同様に定型の判定を返す。</p>
+<ul>
+<li><code>[CODE-REVIEW]: APPROVE</code> — 承認</li>
+<li><code>[CODE-REVIEW]: CONCERNS</code> — 懸念あり(修正を戻す)</li>
+<li><code>[CODE-REVIEW]: REJECT</code> — 却下</li>
+<li><code>[CODE-REVIEW]: SPEC-ISSUE</code> — 仕様の問題</li>
+</ul>
+<p>判定が定型の文字列であることが重要である。オーケストレーターはこの文字列を機械的に読み取り、「SUCCESS かつ APPROVE ならループを抜ける」「FAIL なら implementer を再度呼ぶ」といった制御を確実に行える。人間の曖昧な言い回しではなく、決まった記号で結果を返すことで、ループの進行を自動化している。</p>
+
+<figure>
+<div class="mermaid">
+flowchart TB
+  S["実装 or 修正"] --&gt; T["tester"]
+  T --&gt; QT{"判定?"}
+  QT -- FAIL --&gt; S
+  QT -- SPEC-ISSUE --&gt; H["人間へエスカレーション"]
+  QT -- SUCCESS --&gt; R["reviewer"]
+  R --&gt; QR{"判定?"}
+  QR -- CONCERNS/REJECT --&gt; S
+  QR -- SPEC-ISSUE --&gt; H
+  QR -- APPROVE --&gt; DONE["完了(コミット・クローズへ)"]
+</div>
+<figcaption>図3-1 実装ループの状態遷移。SUCCESS かつ APPROVE に到達するまで実装へ差し戻される。</figcaption>
+</figure>
+
+<p>reviewer のフロントマターには特徴がある。<code>tools: Read, Grep, Glob, Bash</code> と、<code>Bash</code> が含まれる。reviewer は実際にテストを走らせたりコードを検索したりして、机上ではなく実行に基づいたレビューができる。</p>
+
+<h3>3.4 判断を担う役割 — product-manager と tech-lead</h3>
+<p>新機能を作る局面では、実装に入る前に「作るべきか」「実現可能か」を判断する必要がある。これを担うのが product-manager と tech-lead である。product-manager の定義を見る。</p>
+<pre><code>---
+<span class="k">name</span>: product-manager
+<span class="k">tools</span>: Read, Grep, Glob, WebSearch
+<span class="k">disallowedTools</span>: Agent
+<span class="k">model</span>: opus
+---</code></pre>
+<p>product-manager が使えるツールは <code>Read, Grep, Glob, WebSearch</code> に限られる。<strong>ファイルの書き込みができない</strong>。これは意図的である。この役割の仕事は「判断」であって「実装」ではない。読む・調べることはできるが、コードを変えることはできない。役割とツール権限が一致している。</p>
+<p>product-manager と tech-lead は、それぞれ <code>[PM-SCOPE]: APPROVE</code> と <code>[TL-FEASIBILITY]: APPROVE</code> という判定を返す。tester / reviewer と同じく、定型の判定でループの進行を制御する。新機能のワークフロー(第4.3節)では、この2つの承認を得てから実装に入る。</p>
+
+<hr>
+
+<h2 id="c4">第4章 .claude/skills/ — 定型ワークフロー</h2>
+
+<h3>4.1 スキルの定義形式</h3>
+<p><code>.claude/skills/</code> には3つのスキルがあり、それぞれ1つのディレクトリと <code>SKILL.md</code> を持つ。スキルは「名前を付けて呼び出せる定型ワークフロー」である。<code>next-task</code> の定義冒頭を見る。</p>
+<pre><code>---
+<span class="k">name</span>: next-task
+<span class="k">description</span>: Trigger this skill when the user asks "what should we do next", ...
+<span class="k">argument-hint</span>: "[optional context or focus area]"
+<span class="k">user-invocable</span>: true
+<span class="k">allowed-tools</span>: Read, Grep, Glob, Bash, WebSearch, Agent(doc-updater, implementer, tester, reviewer), AskUserQuestion
+<span class="k">disallowed-tools</span>: Write, Edit, Replace
+<span class="k">model</span>: opus
+---</code></pre>
+<p>フロントマターの項目を読む。</p>
+<ul>
+<li><code>name</code>: スキル名。ユーザーは <code>/next-task</code> として呼び出す。</li>
+<li><code>description</code>: 発火条件。「次に何をすべきか」「作業を再開したい」といった要求で起動する。</li>
+<li><code>user-invocable: true</code>: 人間がスラッシュコマンドで直接呼べることを示す。</li>
+<li><code>allowed-tools</code>: このスキルが使えるツール。注目すべきは <code>Agent(doc-updater, implementer, tester, reviewer)</code> である。next-task は<strong>この4つのサブエージェントを呼び出す権限を持つ</strong>。つまり next-task はオーケストレーターとして実装ループを回せる。</li>
+<li><code>disallowed-tools: Write, Edit, Replace</code>: <strong>ファイルの書き込みができない</strong>。next-task 自身はコードを書かず、実装は implementer に委譲する。役割の分離がここでも徹底されている。</li>
+<li><code>model: opus</code>: 統括役なので判断力の高いモデルを使う。</li>
+</ul>
+<p><code>allowed-tools</code> と <code>disallowed-tools</code> の組み合わせが、そのスキルの権限を精密に定義している。next-task は「サブエージェントを呼べるが自分では書き込めない」統括専用スキルである。</p>
+
+<h3>4.2 next-task — 作業の再開と継続</h3>
+<p><code>SKILL.md</code> の本文は、スキルが起動されたときにエージェントが従うべき手順を段階的に記述する。next-task は7つのステップを持つ。</p>
+<ol>
+<li>状況分析(<code>docs/planning/</code> と未完了のIssue、git履歴を確認)</li>
+<li>次タスクの候補を提示し、人間に選ばせる</li>
+<li>Issue作成とブランチの切り出し(<code>issue-N</code>)</li>
+<li>implementer による実装</li>
+<li>tester → reviewer のループ(SUCCESS かつ APPROVE まで)</li>
+<li>doc-updater による文書・ADR更新</li>
+<li>Issueへのコメントとクローズ、マージ</li>
+</ol>
+<p>このステップ列は、第2.4節の委譲ルールをワークフローとして具体化したものである。人間が <code>/next-task</code> と打つだけで、状況把握から実装・テスト・レビュー・記録・完了までの一連が、定められた順序で進む。本文には「テスターが SUCCESS を返し、かつレビュアーが APPROVE を返すまでこのサイクルを繰り返せ。このループを飛ばすな」といった厳格な指示が明記されており、品質ゲートを省略できないようになっている。</p>
+
+<figure>
+<div class="mermaid">
+flowchart LR
+  S1["1. 状況分析"] --&gt; S2["2. 候補提示&lt;br/&gt;(人間が選択)"]
+  S2 --&gt; S3["3. Issue+ブランチ"]
+  S3 --&gt; S4["4. 実装"]
+  S4 --&gt; S5["5. test/review ループ"]
+  S5 --&gt; S6["6. docs/ADR 更新"]
+  S6 --&gt; S7["7. コメント・クローズ・マージ"]
+</div>
+<figcaption>図4-1 next-task の7ステップ。1コマンドで状況把握から完了までが定められた順序で進む。</figcaption>
+</figure>
+
+<h3>4.3 new-spec と brainstorm — 新しいものを作る</h3>
+<p>残る2つのスキルは、新機能や新しい構想を扱う。<code>new-spec</code> のフロントマターを見る。</p>
+<pre><code>---
+<span class="k">name</span>: new-spec
+<span class="k">allowed-tools</span>: Read, WebSearch, Agent(doc-updater, implementer, tester, reviewer, tech-lead, product-manager), AskUserQuestion
+<span class="k">disallowed-tools</span>: Write, Edit, Replace
+<span class="k">model</span>: opus
+---</code></pre>
+<p>next-task との違いは、<code>Agent(...)</code> に <strong>tech-lead と product-manager が加わっている</strong>点である。new-spec は新機能を作るスキルなので、実装ループの4役に加えて、実装前の判断を担う2役を呼び出せる。手順も、仕様のブレインストーミング → PM/tech-lead の承認ゲート → 実装ループ、という順序になっている。作るべきかを判断してから作る、という流れがスキルとして固定されている。</p>
+<p><code>brainstorm</code> はさらに前段階の、まだ仕様が存在しない構想を扱う。フロントマターの <code>disallowed-tools: Bash</code> が示すように、コマンド実行すら禁じられた、純粋な思考のためのスキルである。</p>
+
+<figure>
+<div class="mermaid">
+flowchart LR
+  B["brainstorm&lt;br/&gt;構想(仕様なし)"] --&gt; N["new-spec&lt;br/&gt;新規実装"]
+  N --&gt; NT["next-task&lt;br/&gt;継続実装"]
+  B -.- b1["Bash も禁止&lt;br/&gt;純粋な思考"]
+  N -.- n1["PM/tech-lead 承認&lt;br/&gt;→ 実装ループ"]
+  NT -.- t1["状況分析&lt;br/&gt;→ 実装ループ"]
+</div>
+<figcaption>図4-2 3つのスキルは開発段階に対応する。いずれも統括役自身は書き込まず、実装は委譲する。</figcaption>
+</figure>
+<p>3つのスキルは、開発の段階に対応している。<strong>brainstorm(構想)→ new-spec(新規実装)→ next-task(継続実装)</strong>。どの段階でも、統括スキル自身は書き込まず、専門サブエージェントに委譲する構造は共通している。</p>
+
+<hr>
+
+<h2 id="c5">第5章 .claude/hooks/ — 完了を止めるフック</h2>
+
+<h3>5.1 Stopフックの登録</h3>
+<p>第2.3節で触れた「ADRを更新しないと完了できない」仕組みを、いよいよ読む。まず、フックの登録を見る。<code>.claude/settings.json</code> の内容である。</p>
+<pre><code>{
+  <span class="s">"hooks"</span>: {
+    <span class="s">"Stop"</span>: [
+      {
+        <span class="s">"hooks"</span>: [
+          {
+            <span class="s">"type"</span>: <span class="s">"command"</span>,
+            <span class="s">"command"</span>: <span class="s">"\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/adr-check.sh"</span>,
+            <span class="s">"timeout"</span>: 15,
+            <span class="s">"statusMessage"</span>: <span class="s">"ADR更新チェック中..."</span>
+          }
+        ]
+      }
+    ]
+  }
+}</code></pre>
+<p><code>hooks.Stop</code> は、エージェントが<strong>作業を完了しようとした瞬間(Stop)</strong>に走るフックの登録である。ここに <code>adr-check.sh</code> というシェルスクリプトを、コマンドとして登録している。<code>timeout: 15</code> は15秒でタイムアウトする指定、<code>statusMessage</code> は実行中に表示されるメッセージである。</p>
+<p>Stopフックは、エージェントが「終わります」と言う直前に割り込む。フックが完了を許可すれば終われるが、拒否すれば終われず、指摘された内容に対処してから再度完了を試みることになる。</p>
+
+<h3>5.2 adr-check.sh — 設計変更を検出する</h3>
+<p>フックの本体を読む。前半は準備である。</p>
+<pre><code><span class="c">#!/bin/bash</span>
+input=$(cat)
+
+<span class="c"># Prevent infinite loop: if we already blocked once this turn, let Claude stop.</span>
+<span class="k">if</span> [ <span class="s">"$(printf '%s' "$input" | jq -r '.stop_hook_active // false')"</span> = <span class="s">"true"</span> ]; <span class="k">then</span>
+  <span class="k">exit</span> 0
+<span class="k">fi</span>
+
+root=$(git rev-parse --show-toplevel) || <span class="k">exit</span> 0
+<span class="k">cd</span> <span class="s">"$root"</span> || <span class="k">exit</span> 0</code></pre>
+<ul>
+<li><code>input=$(cat)</code> で、フックに渡される情報(JSON形式)を標準入力から読む。</li>
+<li>次の <code>if</code> が<strong>無限ループの防止</strong>である。フックが一度ブロックすると、<code>stop_hook_active</code> が真になる。すでに一度ブロックした後であれば、<code>exit 0</code>(完了を許可)して抜ける。これがなければ、対処後も延々とブロックし続けてしまう。一度指摘したら、次は通す、という設計である。</li>
+<li><code>git rev-parse</code> でリポジトリのルートに移動する。git管理下でなければ何もせず終了する。</li>
+</ul>
+<p>続いて、変更されたファイルを集める。</p>
+<pre><code><span class="c"># Changes in this work window: uncommitted diff + commits from the last 30 minutes.</span>
+changed=$(
+  {
+    git diff --name-only HEAD --
+    git log --since=<span class="s">"30 minutes ago"</span> --name-only --pretty=format:
+  } | sort -u | sed <span class="s">'/^$/d'</span>
+)</code></pre>
+<p>「この作業で変更されたファイル」を2つの経路から集める。一つは未コミットの差分(<code>git diff</code>)、もう一つは直近30分のコミットに含まれるファイル(<code>git log --since</code>)。両者を合わせて重複を除く。コミット済み・未コミットの両方を対象にすることで、「今の作業で触ったもの」を漏れなく拾う。</p>
+
+<h3>5.3 判定 — 設計ファイルの変更にADRが伴うか</h3>
+<p>集めたファイルのうち、設計に関わるものを抽出し、ADRの更新があるかを確認する。</p>
+<pre><code>design=$(printf <span class="s">'%s\n'</span> <span class="s">"$changed"</span> | grep -E <span class="s">'^(docs/(architecture|detailed-design|workflows)/|config/[^/]+\.ya?ml$)'</span>)
+
+<span class="k">if</span> [ -n <span class="s">"$design"</span> ] && ! printf <span class="s">'%s\n'</span> <span class="s">"$changed"</span> | grep -q <span class="s">'^docs/planning/adr\.md$'</span>; <span class="k">then</span>
+  jq -n --arg files <span class="s">"..."</span> <span class="s">'{
+    decision: "block",
+    reason: ("設計変更が検出されましたが ... ADR を追記してください ...")
+  }'</span>
+<span class="k">fi</span>
+<span class="k">exit</span> 0</code></pre>
+<p>判定は2つの条件の組み合わせである。</p>
+<ul>
+<li><code>design</code> — 変更ファイルの中に、<code>docs/architecture/</code>・<code>docs/detailed-design/</code>・<code>docs/workflows/</code> 配下、または <code>config/</code> 直下の <code>.yaml</code>/<code>.yml</code> があるか。これらが「設計に関わるパス」である。</li>
+<li>後半の <code>grep -q '^docs/planning/adr\.md$'</code> — 変更ファイルの中に <code>docs/planning/adr.md</code> が含まれるか。</li>
+</ul>
+<p>条件は「設計ファイルが変更された(<code>design</code> が空でない)、<strong>かつ</strong> ADRファイルは変更されていない(<code>!</code> で否定)」である。この両方が成り立つとき、<code>jq</code> で <code>{"decision": "block", "reason": "..."}</code> というJSONを出力する。この <code>decision: "block"</code> が、エージェントの完了を拒否する。理由文には、どのファイルが設計変更に該当したかが列挙される。</p>
+<p>逆に言えば、設計ファイルを変更したときに <code>docs/planning/adr.md</code> も一緒に変更していれば、条件は成立せず、フックは何も出力せずに <code>exit 0</code> する。完了が許可される。</p>
+
+<figure>
+<div class="mermaid">
+flowchart TB
+  START["完了しようとする(Stop)"] --&gt; Q0{"既に一度&lt;br/&gt;ブロック済み?"}
+  Q0 -- はい --&gt; PASS0["完了を許可&lt;br/&gt;(無限ループ防止)"]
+  Q0 -- いいえ --&gt; COL["変更ファイルを収集&lt;br/&gt;(未コミット+直近30分)"]
+  COL --&gt; Q1{"設計ファイルを&lt;br/&gt;変更した?"}
+  Q1 -- いいえ --&gt; PASS1["完了を許可"]
+  Q1 -- はい --&gt; Q2{"adr.md も&lt;br/&gt;変更した?"}
+  Q2 -- はい --&gt; PASS2["完了を許可"]
+  Q2 -- いいえ --&gt; BLOCK["完了をブロック&lt;br/&gt;理由を返す"]
+</div>
+<figcaption>図5-1 adr-check.sh の判定。設計ファイル変更ありかつADR更新なしのときだけ完了を止める。</figcaption>
+</figure>
+
+<h3>5.4 フックが強制する規律</h3>
+<p>この30数行のシェルスクリプトが、第2.3節で <code>CLAUDE.md</code> が述べた「設計変更にはADRを伴え」という規律を、<strong>言葉のお願いではなく実行される検査</strong>に変えている。</p>
+<p>エージェントが設計ファイルを変更してADRを書き忘れたまま完了しようとすると、フックがブロックし、理由を返す。エージェントはそれを読み、ADRを追記するか、あるいは「これは誤字修正なのでADR不要」と人間に一言伝えてから再度完了する(第5.2節の無限ループ防止により、2度目は通る)。</p>
+<p>重要なのは、この強制が<strong>AIの自己申告に依存していない</strong>点である。エージェントが「ADRを書くのを忘れないようにしよう」と心がけるのではなく、忘れたら機械的に止まる。同じリポジトリのプロキシ群が「セキュリティ判定をAIの外側の決定的なコードに置く」思想を持っていたのと同じ発想が、開発プロセスの規律にも適用されている。</p>
+
+<hr>
+
+<h2 id="c6">第6章 全体像 — 設定が形づくる開発の流れ</h2>
+
+<h3>6.1 3つの構成要素の連携</h3>
+<p>ここまで読んだ要素を、一つの流れとして結ぶ。</p>
+<ul>
+<li><strong>CLAUDE.md</strong> が、プロジェクトの決まりごと(仕様駆動・ADR規律・委譲ルール)を宣言する。</li>
+<li><strong>skills</strong> が、その決まりごとを実行可能なワークフローに落とす。人間が <code>/next-task</code> や <code>/new-spec</code> と打つと、統括スキルが起動する。</li>
+<li><strong>agents</strong> が、ワークフローの各段階を担う専門役割を提供する。統括スキルは自分では書き込まず、implementer・tester・reviewer らに委譲する。</li>
+<li><strong>hooks</strong> が、規律を機械的に強制する。設計変更にADRが伴わなければ完了を止める。</li>
+</ul>
+<p>人間の関与は「何をするか」の指示と、要所での承認・判断に絞られる。「どう進めるか」(実装 → テスト → レビュー → 記録 → 完了)は、設定に書かれた手順が担う。</p>
+
+<h3>6.2 一貫する思想 — 決定と実行の分離</h3>
+<p><code>.claude/</code> 全体を貫く思想は、<strong>「決定を下す役割」と「作業を実行する役割」の分離</strong>である。</p>
+<table>
+<tr><th>役割</th><th>できること</th><th>できないこと(権限で禁止)</th></tr>
+<tr><td>統括スキル(next-task/new-spec)</td><td>委譲・判断</td><td>書き込み(Write/Edit 禁止)</td></tr>
+<tr><td>product-manager / tech-lead</td><td>調査・判断</td><td>実装(書き込み系ツールなし)</td></tr>
+<tr><td>doc-updater</td><td>記録</td><td>決定を下す(CLAUDE.md が明記)</td></tr>
+<tr><td>implementer / tester</td><td>手を動かす</td><td>さらなる委譲(Agent 禁止)</td></tr>
+</table>
+<p>それぞれの役割に対して、使えるツールの範囲が権限として与えられ、役割を越えた行為ができないようになっている。これは第5章のフックと同じく、「そうあるべき」を「そうしかできない」に変える構造である。</p>
+
+<h3>6.3 なぜこう作るのか</h3>
+<p>AIエージェントは有能だが、その判断は非決定的である。同じ指示でも、日によって、あるいは文脈によって、異なる進め方をとりうる。開発という積み重ねの作業では、この揺らぎが品質のばらつきや手順の抜けを生む。</p>
+<p><code>CLAUDE.md</code> と <code>.claude/</code> は、この揺らぎを設定で抑え込む装置である。決まりごとを文書に固定し(CLAUDE.md)、手順をワークフローに固定し(skills)、役割と権限を分離し(agents)、規律をフックで強制する(hooks)。AIには「何をしたいか」の柔軟さを残しつつ、「どう進めるか」の骨格を外側から与える。</p>
+<p>これは、同じリポジトリのプロキシ群がセキュリティに対してとった姿勢 — AIを信頼するのではなく、AIが揺らいでも壊れない側にシステムを置く — を、開発プロセスそのものに適用したものである。7mimi-agent のコードの大半が、実際にこの仕組みの下で、サブエージェントの分業によって書かれている。設定ファイルが、開発の進め方そのものを形づくっているのである。</p>
+
+</main>
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs";
+  function themeIsDark() {
+    var t = document.documentElement.getAttribute("data-theme");
+    if (t) return t === "dark";
+    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  }
+  mermaid.initialize({ startOnLoad: true, theme: themeIsDark() ? "dark" : "default", securityLevel: "loose" });
+</script>
+</body>
+</html>
