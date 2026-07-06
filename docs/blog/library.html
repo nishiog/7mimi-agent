@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>7mimi-agent 技術解説シリーズ — 目録</title>
+<style>
+  :root { --fg:#1a1f27; --bg:#fff; --muted:#5b6472; --accent:#0b5cad; --card:#f5f7fa; --border:#d6dce4; }
+  @media (prefers-color-scheme: dark){ :root{ --fg:#e4e8ee; --bg:#121620; --muted:#9aa4b2; --accent:#6fb2ff; --card:#1a2030; --border:#2c3648; } }
+  :root[data-theme="dark"]{ --fg:#e4e8ee; --bg:#121620; --muted:#9aa4b2; --accent:#6fb2ff; --card:#1a2030; --border:#2c3648; }
+  :root[data-theme="light"]{ --fg:#1a1f27; --bg:#fff; --muted:#5b6472; --accent:#0b5cad; --card:#f5f7fa; --border:#d6dce4; }
+  *{box-sizing:border-box}
+  body{margin:0;padding:0 1.3rem 5rem;background:var(--bg);color:var(--fg);
+    font-family:"Hiragino Sans","Noto Sans JP",system-ui,sans-serif;line-height:1.8}
+  main{max-width:760px;margin:0 auto}
+  h1{font-size:1.5rem;margin:2.6rem 0 .4rem;border-bottom:3px double var(--border);padding-bottom:.9rem}
+  .sub{color:var(--muted);margin:0 0 2rem}
+  a{color:var(--accent);text-decoration:none}
+  .card{display:block;background:var(--card);border:1px solid var(--border);border-left-width:6px;
+    border-radius:10px;padding:1rem 1.3rem;margin:1rem 0;text-decoration:none;color:inherit}
+  .card:hover{border-color:var(--accent)}
+  .card h2{font-size:1.12rem;margin:.1rem 0 .4rem}
+  .card p{margin:.3rem 0 0;color:var(--muted);font-size:.92rem}
+  .tag{display:inline-block;font-size:.72rem;color:var(--muted);border:1px solid var(--border);
+    border-radius:999px;padding:.05rem .55rem;margin-left:.4rem;vertical-align:middle}
+  .theme-toggle{position:fixed;top:.8rem;right:.8rem;background:var(--card);border:1px solid var(--border);
+    color:var(--fg);border-radius:6px;padding:.3rem .6rem;font-size:.8rem;cursor:pointer}
+  .note{color:var(--muted);font-size:.85rem;margin-top:2.5rem;border-top:1px solid var(--border);padding-top:1rem}
+</style>
+</head>
+<body>
+<button class="theme-toggle" onclick="(function(){var r=document.documentElement;var d=(r.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'))==='dark';r.setAttribute('data-theme',d?'light':'dark');})()">◐ 表示切替</button>
+<main>
+<h1>7mimi-agent 技術解説シリーズ — 目録</h1>
+<p class="sub">このリポジトリの実コードとADRを題材にした、教科書スタイルの技術解説集。前提知識のない読者を想定し、実際のコードを一行ずつ引用しながら解説する。各編は独立して読める。</p>
+
+<a class="card" href="index.html" style="border-left-color:#0b6bcb">
+  <h2>0. メルカリのブログを読んで、「自律 AI エージェント」を週末に自作した話 <span class="tag">読み物・概観</span></h2>
+  <p>プロジェクト全体の物語。ノンエンジニア向けの「自律AIとは」から、エンジニア向けの構成・開発プロセス・失敗談まで。まずはここから。</p>
+</a>
+
+<a class="card" href="security-design-guide.html" style="border-left-color:#b02a37">
+  <h2>1. 7mimi-agent のセキュリティ設計を読む <span class="tag">全体像</span></h2>
+  <p>「AIを信頼しない設計」の総論。脅威モデル、credential分離、多層防御、egress強制、決定的認可、prompt injection対策、コスト制御、監査を通史的に。</p>
+</a>
+
+<a class="card" href="proxy-guide.html" style="border-left-color:#0b5cad">
+  <h2>2. claude-proxy と auth-proxy を読む <span class="tag">Go・HTTP入門</span></h2>
+  <p>2つの境界サービスを完全に読み解く。設定・監査・中継・認証注入・リバースプロキシ・短命トークン。Go/HTTPの前提知識ゼロから。</p>
+</a>
+
+<a class="card" href="mcp-guide.html" style="border-left-color:#c2610a">
+  <h2>3. MCP と JSON-RPC 入門 <span class="tag">プロトコル</span></h2>
+  <p>auth-proxy の /mcp を教材に、Model Context Protocol と JSON-RPC 2.0 を解説。ツールの宣言・認可・実行、Claude Code の直結接続。</p>
+</a>
+
+<a class="card" href="digest-pipeline-guide.html" style="border-left-color:#0f8a6a">
+  <h2>4. 自律 digest パイプラインを読む <span class="tag">Pythonコード</span></h2>
+  <p>収集(MCP直結)→ LLM執筆 → 検証 → 公開(git relay / Slack)の一連を、runner の Python コードを引用して追う。</p>
+</a>
+
+<a class="card" href="scheduler-guide.html" style="border-left-color:#1560bd">
+  <h2>5. scheduler と cron を読む <span class="tag">自律実行の時計</span></h2>
+  <p>cronパーサ・スケジューラエンジン・耐障害ループ。決定的な時計が非決定的なAIを定時に起動する仕組み。</p>
+</a>
+
+<a class="card" href="claude-config-guide.html" style="border-left-color:#6a3fb0">
+  <h2>6. CLAUDE.md と .claude/ を読む <span class="tag">開発の委譲</span></h2>
+  <p>AIエージェントに開発作業を委ねる仕組み。仕様駆動・委譲ルール・スキル・サブエージェント・ADR強制フック。</p>
+</a>
+
+<a class="card" href="polyglot-adr-guide.html" style="border-left-color:#4b4bcf">
+  <h2>7. ポリグロット設計と ADR を読む <span class="tag">設計判断</span></h2>
+  <p>なぜ Python と Go に分けたのか。両言語の境界の「契約」、そして設計判断を残す ADR の仕組みと歴史。</p>
+</a>
+
+<p class="note">7mimi(しちみみ)。すべての解説はライト/ダーク両対応。右上のボタンで切り替えられる。</p>
+</main>
+</body>
+</html>

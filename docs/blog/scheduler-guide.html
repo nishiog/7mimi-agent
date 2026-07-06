@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>scheduler と cron を読む — 自律実行の時計</title>
+<style>
+  :root {
+    --fg: #1a1f27; --bg: #ffffff; --muted: #5b6472; --accent: #1560bd;
+    --card: #f5f7fa; --border: #d6dce4; --code-bg: #f4f6f8; --code-fg: #24292f;
+    --kw: #b3005a; --str: #0a7d3f; --com: #6a7480; --num: #8a4b00;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg: #e4e8ee; --bg: #121620; --muted: #9aa4b2; --accent: #6fb0f5;
+            --card: #1a2030; --border: #2c3648; --code-bg: #1b2130; --code-fg: #d6dce6;
+            --kw: #ff86b8; --str: #7fd69a; --com: #7d8896; --num: #e0a06a; }
+  }
+  :root[data-theme="dark"] {
+    --fg: #e4e8ee; --bg: #121620; --muted: #9aa4b2; --accent: #6fb0f5;
+    --card: #1a2030; --border: #2c3648; --code-bg: #1b2130; --code-fg: #d6dce6;
+    --kw: #ff86b8; --str: #7fd69a; --com: #7d8896; --num: #e0a06a;
+  }
+  :root[data-theme="light"] {
+    --fg: #1a1f27; --bg: #ffffff; --muted: #5b6472; --accent: #1560bd;
+    --card: #f5f7fa; --border: #d6dce4; --code-bg: #f4f6f8; --code-fg: #24292f;
+    --kw: #b3005a; --str: #0a7d3f; --com: #6a7480; --num: #8a4b00;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 0 1.3rem 5rem; background: var(--bg); color: var(--fg);
+         font-family: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
+         line-height: 1.95; font-size: 16.5px; }
+  main { max-width: 780px; margin: 0 auto; }
+  h1 { font-size: 1.62rem; line-height: 1.5; margin: 2.8rem 0 1.4rem; font-weight: 700;
+       border-bottom: 3px double var(--border); padding-bottom: 1rem; }
+  h2 { font-size: 1.3rem; margin-top: 3.4rem; padding: .4rem 0 .35rem .7rem;
+       border-left: 5px solid var(--accent); background: var(--card); }
+  h3 { font-size: 1.08rem; margin-top: 2.4rem; color: var(--accent); font-weight: 700; }
+  p { margin: 1rem 0; text-align: justify; }
+  a { color: var(--accent); }
+  .lead { color: var(--muted); }
+  ul, ol { padding-left: 1.5rem; }
+  li { margin: .4rem 0; }
+  code { font-family: "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+         font-size: .85em; background: var(--code-bg); padding: .1em .38em; border-radius: 4px;
+         color: var(--code-fg); }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+        padding: 1rem 1.1rem; overflow-x: auto; margin: 1.4rem 0; line-height: 1.7; }
+  pre code { background: none; padding: 0; font-size: 13.5px; }
+  table { border-collapse: collapse; width: 100%; margin: 1.4rem 0; display: block; overflow-x: auto;
+          font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; font-size: .92rem; }
+  th, td { border: 1px solid var(--border); padding: .5rem .8rem; text-align: left; vertical-align: top; }
+  th { background: var(--card); }
+  .toc { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+         padding: 1rem 1.4rem; margin: 2rem 0;
+         font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; font-size: .95rem; }
+  .toc ol { padding-left: 1.3rem; } .toc li { margin: .25rem 0; }
+  .toc a { text-decoration: none; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 3rem 0; }
+  strong { font-weight: 700; }
+  /* code token colors */
+  .k { color: var(--kw); } .s { color: var(--str); } .c { color: var(--com); font-style: italic; }
+  .n { color: var(--num); }
+  .theme-toggle { position: fixed; top: .8rem; right: .8rem; background: var(--card);
+    border: 1px solid var(--border); color: var(--fg); border-radius: 6px; padding: .3rem .6rem;
+    font-size: .8rem; cursor: pointer; font-family: sans-serif; }
+  figure { margin: 1.8rem 0; }
+  .mermaid { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1.1rem; margin: 0; overflow-x: auto; text-align: center;
+    font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  figcaption { font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; font-size: .85rem;
+    color: var(--muted); text-align: center; margin-top: .5rem; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" onclick="(function(){var r=document.documentElement;var d=(r.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'))==='dark';r.setAttribute('data-theme',d?'light':'dark');})()">◐ 表示切替</button>
+<main>
+
+<h1>scheduler と cron を読む<br><span style="font-size:.72em;font-weight:400;color:var(--muted)">— 自律実行の時計 —</span></h1>
+
+<p class="lead">本書は、7mimi-agent の定時実行を担う <strong>scheduler</strong> と、その心臓部である <strong>cron 式パーサ</strong> を題材に、これらがどのような仕組みで「決まった時刻に決まった仕事を起動する」のかを、予備知識のない読者に向けて解説するものである。実際の Python ソースコードを引用しながら、一行ずつ意味を確認していく形式をとる。口語的な読み物ではなく、順を追って理解を積み上げる教科書として記述する。主題は一貫して一つである。<strong>決定的な時計が、非決定的な AI を定時に起動する</strong>。</p>
+
+<div class="toc">
+<strong>目次</strong>
+<ol>
+<li><a href="#c1">第1章 cron 式とは何か</a></li>
+<li><a href="#c2">第2章 cron パーサ — 記法を集合に変える</a></li>
+<li><a href="#c3">第3章 dom と dow の OR セマンティクス</a></li>
+<li><a href="#c4">第4章 エンジン — 毎分の常駐ループ</a></li>
+<li><a href="#c5">第5章 executor の登録 — 実行できるジョブだけを実行する</a></li>
+<li><a href="#c6">第6章 耐障害性 — 一つの失敗で時計を止めない</a></li>
+<li><a href="#c7">第7章 責務の限定(ADR-022)</a></li>
+<li><a href="#c8">第8章 Phase 3 ジョブの整理(ADR-029)</a></li>
+<li><a href="#end">むすび</a></li>
+</ol>
+</div>
+
+<hr>
+
+<h2 id="c1">第1章 cron 式とは何か</h2>
+
+<h3>1.1 5つのフィールド</h3>
+<p>cron(クロン)式とは、「いつ実行するか」を5つの数字の欄(フィールド)で表す記法である。Unix 系 OS で数十年使われてきた、定時実行の事実上の標準記法である。空白で区切られた5つのフィールドは、左から順に次の意味を持つ。</p>
+<pre><code><span class="c"># ┌──────── minute (0-59)  分</span>
+<span class="c"># │ ┌────── hour   (0-23)  時</span>
+<span class="c"># │ │ ┌──── dom    (1-31)  日(day of month)</span>
+<span class="c"># │ │ │ ┌── mon    (1-12)  月</span>
+<span class="c"># │ │ │ │ ┌ dow    (0-7)   曜日(day of week、0と7が日曜)</span>
+<span class="c"># │ │ │ │ │</span>
+<span class="c">#  0 8 * * 1,4</span></code></pre>
+<p>末尾の <code>0 8 * * 1,4</code> は「分=0、時=8、日=任意、月=任意、曜日=月または木」を意味し、すなわち<strong>毎週月曜と木曜の 8:00</strong> に一致する。7mimi-agent では時刻はすべて Asia/Tokyo(日本時間)として解釈する。</p>
+
+<figure>
+<div class="mermaid">
+flowchart LR
+  E["0 8 * * 1,4"] --&gt; F1["minute = 0"]
+  E --&gt; F2["hour = 8"]
+  E --&gt; F3["dom = *(毎日)"]
+  E --&gt; F4["mon = *(毎月)"]
+  E --&gt; F5["dow = 1,4(月・木)"]
+  F1 --&gt; R["毎週 月・木 の 8:00 JST に発火"]
+  F2 --&gt; R
+  F5 --&gt; R
+</div>
+<figcaption>図1-1 5フィールドの分解。各欄が独立に条件を表し、すべてを満たした分に発火する。</figcaption>
+</figure>
+
+<h3>1.2 実際のジョブ定義</h3>
+<p>7mimi-agent のジョブは <code>config/schedules.yaml</code> に定義される。実際に使われている cron 式を表に示す。記法の詳細は次章で扱うが、まずは「どんな時刻表現が現れるか」を眺めておく。</p>
+<table>
+<tr><th>ジョブ名</th><th>cron 式</th><th>意味</th></tr>
+<tr><td><code>x-signal-collector</code></td><td><code>*/30 8-23 * * *</code></td><td>毎日 8時〜23時台、30分ごと</td></tr>
+<tr><td><code>stock-signal-fact-check</code></td><td><code>0 16 * * 1-5</code></td><td>平日(月〜金)の 16:00</td></tr>
+<tr><td><code>daily-digest-writer</code></td><td><code>30 17 * * 1-5</code></td><td>平日の 17:30</td></tr>
+<tr><td><code>weekly-research-review</code></td><td><code>0 10 * * 6</code></td><td>毎週土曜の 10:00</td></tr>
+<tr><td><code>ai-it-x-daily-digest</code></td><td><code>0 8 * * 1,4</code></td><td>月・木の 8:00</td></tr>
+<tr><td><code>invest-x-daily-digest</code></td><td><code>0 18 * * *</code></td><td>毎日 18:00</td></tr>
+</table>
+<p>この表には、次章で解説する4つの記法 — 単一値(<code>0</code>)、ワイルドカード(<code>*</code>)、リスト(<code>1,4</code>)、範囲(<code>8-23</code>、<code>1-5</code>)、刻み(<code>*/30</code>)— がすべて登場している。cron 式を読めるとは、これらを正しく展開できることに他ならない。</p>
+
+<hr>
+
+<h2 id="c2">第2章 cron パーサ — 記法を集合に変える</h2>
+<p>cron 式は文字列である。プログラムがこれを使うには、「この分は一致するか?」という問いに答えられる形へ変換しなければならない。7mimi-agent の <code>scheduler/cron.py</code> は、各フィールドを<strong>整数の集合(set)</strong>に展開することでこれを実現する。たとえば <code>8-23</code> は <code>{8, 9, 10, …, 23}</code> という集合になり、「今の時刻がこの集合に含まれるか」を調べれば一致判定ができる。</p>
+
+<h3>2.1 4つの記法</h3>
+<p>各フィールドが取りうる記法は4種類、そしてそれらの組み合わせである。</p>
+<table>
+<tr><th>記法</th><th>読み方</th><th>例</th><th>展開後の集合</th></tr>
+<tr><td><code>*</code></td><td>その欄の全範囲</td><td>hour の <code>*</code></td><td><code>{0..23}</code></td></tr>
+<tr><td><code>a</code></td><td>単一の値</td><td><code>8</code></td><td><code>{8}</code></td></tr>
+<tr><td><code>a,b</code></td><td>リスト(複数指定)</td><td><code>1,4</code></td><td><code>{1, 4}</code></td></tr>
+<tr><td><code>a-b</code></td><td>範囲</td><td><code>8-23</code></td><td><code>{8..23}</code></td></tr>
+<tr><td><code>*/n</code></td><td>刻み(n おき)</td><td><code>*/30</code>(分)</td><td><code>{0, 30}</code></td></tr>
+</table>
+
+<h3>2.2 一つのフィールドを集合に展開する</h3>
+<p>この展開を担うのが <code>_parse_field</code> 関数である。フィールド文字列 <code>expr</code> と、その欄が取りうる下限 <code>lo</code>・上限 <code>hi</code> を受け取り、整数集合を返す。まず、リスト(カンマ区切り)を分解し、各要素について刻み <code>/n</code> を切り出す部分を見る。</p>
+<pre><code><span class="k">def</span> _parse_field(expr: str, lo: int, hi: int) -&gt; set[int]:
+    values: set[int] = set()
+    <span class="k">for</span> part <span class="k">in</span> expr.split(<span class="s">","</span>):
+        part = part.strip()
+        <span class="k">if</span> <span class="k">not</span> part:
+            <span class="k">raise</span> ValueError(f<span class="s">"invalid cron field: {expr!r}"</span>)
+        step = <span class="n">1</span>
+        <span class="k">if</span> <span class="s">"/"</span> <span class="k">in</span> part:
+            base, step_str = part.split(<span class="s">"/"</span>, <span class="n">1</span>)
+            step = int(step_str)
+        <span class="k">else</span>:
+            base = part</code></pre>
+<p><code>expr.split(",")</code> でリストを要素ごとに分ける。各要素 <code>part</code> に <code>/</code> があれば、その前を <code>base</code>(基礎部分)、後ろを <code>step</code>(刻み幅)として切り出す。<code>/</code> がなければ刻みは <code>1</code>、すなわち「その範囲を1おき=すべて」である。</p>
+<p>次に、<code>base</code> の部分を解釈して、範囲の下限 <code>range_lo</code> と上限 <code>range_hi</code> を決める。</p>
+<pre><code>        <span class="k">if</span> base == <span class="s">"*"</span>:
+            range_lo, range_hi = lo, hi
+        <span class="k">elif</span> <span class="s">"-"</span> <span class="k">in</span> base:
+            lo_str, hi_str = base.split(<span class="s">"-"</span>, <span class="n">1</span>)
+            range_lo, range_hi = int(lo_str), int(hi_str)
+        <span class="k">else</span>:
+            range_lo = range_hi = int(base)
+
+        <span class="k">if</span> range_lo &gt; range_hi <span class="k">or</span> range_lo &lt; lo <span class="k">or</span> range_hi &gt; hi:
+            <span class="k">raise</span> ValueError(f<span class="s">"cron field out of range: {expr!r}"</span>)
+
+        <span class="k">for</span> value <span class="k">in</span> range(range_lo, range_hi + <span class="n">1</span>, step):
+            values.add(value)</code></pre>
+<p>3通りに分岐する。<code>*</code> ならフィールドの全範囲 <code>lo..hi</code>、<code>a-b</code> なら <code>a..b</code>、単一値 <code>a</code> なら下限も上限も <code>a</code> とする。続く検査で、範囲が逆転していないか、欄の許容範囲を超えていないかを確かめ、外れていれば例外を投げる(fail-closed、不正な式は起動時に弾く)。最後に <code>range(range_lo, range_hi + 1, step)</code> で、下限から上限まで <code>step</code> おきの値を集合に足す。<code>*/30</code> なら <code>range(0, 60, 30)</code> となり <code>{0, 30}</code> が得られる。</p>
+
+<figure>
+<div class="mermaid">
+flowchart TB
+  IN["フィールド文字列&lt;br/&gt;例: */30"] --&gt; SPLIT["カンマで分割&lt;br/&gt;(リスト展開)"]
+  SPLIT --&gt; SLASH{"/ を含む?"}
+  SLASH -- はい --&gt; STEP["base=* / step=30"]
+  SLASH -- いいえ --&gt; NOSTEP["base=part / step=1"]
+  STEP --&gt; BASE{"base の形は?"}
+  NOSTEP --&gt; BASE
+  BASE -- "*" --&gt; ALL["lo..hi"]
+  BASE -- "a-b" --&gt; RNG["a..b"]
+  BASE -- "a" --&gt; ONE["a..a"]
+  ALL --&gt; RANGE["range(lo, hi+1, step)&lt;br/&gt;→ 集合に追加"]
+  RNG --&gt; RANGE
+  ONE --&gt; RANGE
+  RANGE --&gt; OUT["整数集合 {…}"]
+</div>
+<figcaption>図2-1 _parse_field の展開手順。リスト → 刻み → 基礎部分の順に分解し、最終的に整数集合を得る。</figcaption>
+</figure>
+
+<h3>2.3 5フィールドをまとめる — CronSchedule</h3>
+<p>各フィールドを集合にできたら、5つをまとめて一つのオブジェクトにする。それが <code>CronSchedule</code> データクラスの <code>parse</code> である。</p>
+<pre><code>    @classmethod
+    <span class="k">def</span> parse(cls, expr: str) -&gt; <span class="s">"CronSchedule"</span>:
+        fields = expr.split()
+        <span class="k">if</span> len(fields) != <span class="n">5</span>:
+            <span class="k">raise</span> ValueError(f<span class="s">"cron expression must have 5 fields: {expr!r}"</span>)
+        minute_s, hour_s, dom_s, mon_s, dow_s = fields
+
+        minute = _parse_field(minute_s, *_FIELD_RANGES[<span class="s">"minute"</span>])
+        hour = _parse_field(hour_s, *_FIELD_RANGES[<span class="s">"hour"</span>])
+        dom = _parse_field(dom_s, *_FIELD_RANGES[<span class="s">"dom"</span>])
+        mon = _parse_field(mon_s, *_FIELD_RANGES[<span class="s">"mon"</span>])
+        dow_raw = _parse_field(dow_s, *_FIELD_RANGES[<span class="s">"dow"</span>])
+        <span class="c"># normalize 7 -&gt; 0 (Sunday)</span>
+        dow = {<span class="n">0</span> <span class="k">if</span> v == <span class="n">7</span> <span class="k">else</span> v <span class="k">for</span> v <span class="k">in</span> dow_raw}</code></pre>
+<p>空白で5つに割り、ちょうど5個でなければ拒否する(fail-closed)。各欄を <code>_parse_field</code> で集合に変える。<code>_FIELD_RANGES</code> は欄ごとの下限・上限の対応表で、<code>minute</code> は <code>(0, 59)</code>、<code>hour</code> は <code>(0, 23)</code> といった具合である。末尾の一行に注目したい。曜日(dow)では慣習上 <code>0</code> と <code>7</code> がともに日曜を表す。そこで <code>7</code> を <code>0</code> に正規化し、以降は日曜を <code>0</code> に統一して扱う。</p>
+<p>parse の戻り値には集合そのものに加え、<code>dom_restricted</code> と <code>dow_restricted</code> という真偽値も含まれる。これは「日/曜日の欄が <code>*</code> でなく具体的に絞られているか」を表し、第3章で決定的な役割を果たす。</p>
+
+<h3>2.4 一致判定と次回発火 — matches と next_after</h3>
+<p>集合さえできれば、ある時刻が一致するかの判定は簡単な包含チェックになる。<code>matches</code> の前半を見る。</p>
+<pre><code>    <span class="k">def</span> matches(self, dt: datetime) -&gt; bool:
+        <span class="k">if</span> dt.minute <span class="k">not</span> <span class="k">in</span> self.minute:
+            <span class="k">return</span> False
+        <span class="k">if</span> dt.hour <span class="k">not</span> <span class="k">in</span> self.hour:
+            <span class="k">return</span> False
+        <span class="k">if</span> dt.month <span class="k">not</span> <span class="k">in</span> self.mon:
+            <span class="k">return</span> False</code></pre>
+<p>分・時・月について、実際の時刻の値がそれぞれの集合に含まれるかを確かめる。一つでも外れれば即座に <code>False</code> を返す。日と曜日の判定だけは特殊で、これは第3章で扱う。</p>
+<p>「次にいつ発火するか」を求めるのが <code>next_after</code> である。凝った逆算はせず、素朴に「次の分から1分ずつ試す」方式をとる。</p>
+<pre><code>    <span class="k">def</span> next_after(self, dt: datetime) -&gt; datetime:
+        candidate = (dt + timedelta(minutes=<span class="n">1</span>)).replace(second=<span class="n">0</span>, microsecond=<span class="n">0</span>)
+        limit = dt + timedelta(days=<span class="n">366</span>)
+        <span class="k">while</span> candidate &lt;= limit:
+            <span class="k">if</span> self.matches(candidate):
+                <span class="k">return</span> candidate
+            candidate += timedelta(minutes=<span class="n">1</span>)
+        <span class="k">raise</span> ValueError(f<span class="s">"no matching time found within search cap for cron: {self.expr!r}"</span>)</code></pre>
+<p>与えられた時刻の次の分を起点に、<code>matches</code> が真になる分が見つかるまで1分ずつ進める。上限は366日先で、そこまで見つからなければ例外を返す(通常の cron 式なら必ずその手前で見つかる)。分解能が「分」であるため、この線形探索でも最大でも数十万回で答えに至り、実用上まったく問題がない。素朴だが確実な設計である。</p>
+
+<figure>
+<div class="mermaid">
+flowchart LR
+  START["基準時刻 dt"] --&gt; C["candidate = 次の分"]
+  C --&gt; M{"matches(candidate)?"}
+  M -- はい --&gt; RET["この分を返す"]
+  M -- いいえ --&gt; INC["candidate += 1分"]
+  INC --&gt; LIM{"366日以内?"}
+  LIM -- はい --&gt; M
+  LIM -- いいえ --&gt; ERR["例外(見つからず)"]
+</div>
+<figcaption>図2-2 next_after の線形探索。分単位で1分ずつ前進し、最初に一致した分を次回発火時刻とする。</figcaption>
+</figure>
+
+<hr>
+
+<h2 id="c3">第3章 dom と dow の OR セマンティクス</h2>
+<p>標準 cron には、初学者を必ず一度は戸惑わせる「癖」がある。日(dom)と曜日(dow)の両方を指定したときの意味である。直感的には「両方を満たす日(AND)」と思いたくなるが、標準 cron の定義は逆で、<strong>どちらか一方でも満たせば一致(OR)</strong>である。</p>
+
+<h3>3.1 なぜ OR なのか</h3>
+<p>例として <code>0 0 1 * 1</code>(分=0、時=0、日=1、曜日=月)を考える。これは「毎月1日の 0:00」と「毎週月曜の 0:00」の<strong>両方</strong>に一致する。「1日かつ月曜」という稀な日だけ、ではない。これは「毎月1日に、加えて毎週月曜にも実行したい」という現実の要求に沿った設計である。ただし、片方が <code>*</code>(無制限)のときは話が別で、その場合は素直に AND として扱う。整理すると次の通りである。</p>
+<table>
+<tr><th>dom</th><th>dow</th><th>判定</th></tr>
+<tr><td>制限あり</td><td>制限あり</td><td><strong>OR</strong>(どちらか一致で発火)</td></tr>
+<tr><td>制限あり</td><td><code>*</code></td><td>AND(実質 dom のみで決まる)</td></tr>
+<tr><td><code>*</code></td><td>制限あり</td><td>AND(実質 dow のみで決まる)</td></tr>
+<tr><td><code>*</code></td><td><code>*</code></td><td>AND(毎日一致)</td></tr>
+</table>
+
+<h3>3.2 コードでの実装</h3>
+<p>この規則を実装しているのが <code>matches</code> の後半である。第2.3節で触れた <code>dom_restricted</code> / <code>dow_restricted</code> がここで効く。</p>
+<pre><code>        dom_match = dt.day <span class="k">in</span> self.dom
+        dow_match = (dt.isoweekday() % <span class="n">7</span>) <span class="k">in</span> self.dow  <span class="c"># Mon=1..Sun=7 -&gt; Sun=0</span>
+
+        <span class="k">if</span> self.dom_restricted <span class="k">and</span> self.dow_restricted:
+            <span class="k">return</span> dom_match <span class="k">or</span> dow_match
+        <span class="k">return</span> dom_match <span class="k">and</span> dow_match</code></pre>
+<p>まず日の一致 <code>dom_match</code> と曜日の一致 <code>dow_match</code> を個別に求める。曜日は <code>dt.isoweekday() % 7</code> で変換している。Python の <code>isoweekday()</code> は月曜=1〜日曜=7 を返すため、7で割った余りをとると日曜=0、月曜=1…土曜=6 となり、cron の慣習(日曜=0)に一致する。そして判定の分岐である。<strong>両欄とも制限されているときだけ OR</strong>、それ以外は AND。この4行が、標準 cron の癖を忠実に再現している。</p>
+
+<figure>
+<div class="mermaid">
+flowchart TB
+  START["ある分の判定"] --&gt; MHM["分・時・月がすべて一致?"]
+  MHM -- いいえ --&gt; NO["不一致"]
+  MHM -- はい --&gt; BOTH{"dom も dow も制限あり?"}
+  BOTH -- "はい(両方指定)" --&gt; OR{"dom一致 OR dow一致?"}
+  BOTH -- "いいえ(片方は *)" --&gt; AND{"dom一致 AND dow一致?"}
+  OR -- はい --&gt; YES["一致 → 発火"]
+  OR -- いいえ --&gt; NO
+  AND -- はい --&gt; YES
+  AND -- いいえ --&gt; NO
+</div>
+<figcaption>図3-1 dom / dow の判定分岐。両方が制限されているときのみ OR、片方が * なら AND に切り替わる。</figcaption>
+</figure>
+
+<hr>
+
+<h2 id="c4">第4章 エンジン — 毎分の常駐ループ</h2>
+<p>cron 式を集合に変えるパーサができた。次は、それを使って「今この分に一致するジョブを実際に起動する」常駐プログラムである。<code>scheduler/engine.py</code> の <code>SchedulerEngine</code> がそれを担う。設計方針(ADR-022)は明快で、<strong>単一プロセス・単一スレッド・逐次実行</strong>である。並列も分散もしない。ジョブ数が少なく実行間隔も分オーダーであるため、これで十分である。</p>
+
+<h3>4.1 毎分、分境界で目覚める</h3>
+<p>エンジンの本体は <code>run_forever</code>、無限ループである。要点は「毎分1回、ちょうど分の境目で目を覚まして、その分に一致するジョブを起動する」ことにある。</p>
+<pre><code>    <span class="k">def</span> run_forever(self) -&gt; None:
+        <span class="k">while</span> True:
+            now = self._now_fn()
+            <span class="k">try</span>:
+                self.run_pending(now)
+            <span class="k">except</span> Exception <span class="k">as</span> exc:  <span class="c"># keep the resident loop alive</span>
+                print(f<span class="s">"scheduler: run_pending raised unexpectedly: {exc}"</span>, file=sys.stderr)
+            next_minute = (now.replace(second=<span class="n">0</span>, microsecond=<span class="n">0</span>)) + timedelta(minutes=<span class="n">1</span>)
+            seconds = max(<span class="n">0.0</span>, (next_minute - now).total_seconds())
+            self._sleep_fn(seconds)</code></pre>
+<p>ループの一周はこうである。現在時刻 <code>now</code> を取り、<code>run_pending(now)</code> でその分に一致するジョブを起動する。次に「次の分の 0 秒」を計算し、そこまでの秒数を <code>sleep</code> で眠る。たとえば今が 8:00:12 なら、次の分 8:01:00 まで 48 秒眠る。こうして<strong>常に分の境界で目覚める</strong>ため、判定が「今の分」に対して安定して行える。<code>_now_fn</code> と <code>_sleep_fn</code> が差し替え可能になっているのは、テストで時刻と睡眠を制御できるようにするためである。</p>
+
+<figure>
+<div class="mermaid">
+flowchart LR
+  W["目覚める&lt;br/&gt;(分境界)"] --&gt; N["now を取得"]
+  N --&gt; RP["run_pending(now)&lt;br/&gt;一致ジョブを起動"]
+  RP --&gt; CALC["次の分の0秒までの&lt;br/&gt;秒数を計算"]
+  CALC --&gt; SLP["sleep(その秒数)"]
+  SLP --&gt; W
+</div>
+<figcaption>図4-1 run_forever の一周。分境界で目覚め、一致ジョブを起動し、次の分境界まで眠る。</figcaption>
+</figure>
+
+<h3>4.2 その分に一致するジョブを集める — run_pending</h3>
+<p><code>run_pending</code> は、登録された全ジョブを順に調べ、いま処理中の分(<code>current_minute</code>)に cron が一致するものを起動する。逐次実行なので、あるジョブが終わるまで次のジョブは始まらない。</p>
+<pre><code>    <span class="k">def</span> run_pending(self, at: datetime) -&gt; list[JobRunResult]:
+        results: list[JobRunResult] = []
+        current_minute = at.replace(second=<span class="n">0</span>, microsecond=<span class="n">0</span>)
+
+        <span class="k">for</span> job <span class="k">in</span> self._jobs:
+            <span class="k">try</span>:
+                cron = self._crons[job.name]
+                <span class="k">if</span> <span class="k">not</span> cron.matches(current_minute):
+                    <span class="k">continue</span></code></pre>
+<p>まず秒以下を切り捨てて「分」に丸める。各ジョブについて、あらかじめ <code>parse</code> しておいた <code>CronSchedule</code> を引き、<code>matches</code> で一致を確かめる。一致しなければ <code>continue</code> で次のジョブへ。一致したジョブについては、この後に二重発火防止と起動処理が続く(第6章で詳述する)。ここで押さえるべきは、判定の中心にあるのが第2〜3章で読んだ <code>matches</code> であり、<strong>パーサとエンジンがここで繋がる</strong>という一点である。</p>
+
+<hr>
+
+<h2 id="c5">第5章 executor の登録 — 実行できるジョブだけを実行する</h2>
+<p>cron が一致したとして、「では何を実行するのか」。ジョブ定義(YAML)は「いつ・どのロールで」を語るが、実際の処理本体は Python 側で <strong>executor(実行関数)</strong>として配線される。ここで重要な設計判断がある。<strong>executor が登録されているジョブだけを実行し、無いジョブは明示的に skip する</strong>。見かけ上「有効」なのに実体のないジョブを、動いているふりで放置しない。</p>
+
+<h3>5.1 起動時の二重フィルタ</h3>
+<p>ジョブが実行対象になるには2段階の関門がある。第一は YAML の <code>enabled</code>、第二は executor の存在である。エンジンはジョブ読み込み時、まず <code>enabled: false</code> のジョブを落とす。</p>
+<pre><code>        <span class="k">for</span> raw <span class="k">in</span> schedules.get(<span class="s">"jobs"</span>) <span class="k">or</span> []:
+            enabled = raw.get(<span class="s">"enabled"</span>, defaults.get(<span class="s">"enabled"</span>, True))
+            <span class="k">if</span> <span class="k">not</span> enabled:
+                <span class="k">continue</span>
+            jobs.append(_JobSpec(name=raw[<span class="s">"name"</span>], role=raw.get(<span class="s">"role"</span>, <span class="s">""</span>), ...))</code></pre>
+<p>たとえば <code>x-signal-collector</code> と <code>invest-x-daily-digest</code> は現在 <code>enabled: false</code>(コスト削減のため停止中)であり、この時点でジョブ一覧から外れる。</p>
+
+<h3>5.2 executor の配線</h3>
+<p>第二の関門が executor である。<code>cli.py</code> の <code>_build_scheduler_executors</code> が、実装済みの実行経路を持つジョブにだけ関数を割り当てる。現在 executor を持つのは3つのジョブである。</p>
+<table>
+<tr><th>ジョブ名</th><th>executor(実行本体)</th><th>required_env(必要な環境変数)</th></tr>
+<tr><td><code>ai-it-x-daily-digest</code></td><td>claude-digest パイプライン</td><td>X_MCP / CLAUDE_PROXY / GIT_PROXY の URL とトークン</td></tr>
+<tr><td><code>invest-x-daily-digest</code></td><td>invest-digest パイプライン</td><td>X_MCP / CLAUDE_PROXY / SLACK_NOTIFY の URL とトークン</td></tr>
+<tr><td><code>x-signal-collector</code></td><td>collect_x(決定的な X 収集)</td><td>X_MCP_URL / X_MCP_SESSION_TOKEN</td></tr>
+</table>
+<p>各 executor は、実行の冒頭で自分に必要な環境変数が揃っているかを確かめる。欠けていれば即座に失敗させる(fail-closed)。</p>
+<pre><code>    <span class="k">def</span> _run_ai_it_x_daily_digest(job: dict[str, Any]) -&gt; None:
+        missing = [name <span class="k">for</span> name <span class="k">in</span> required_env <span class="k">if</span> <span class="k">not</span> os.environ.get(name)]
+        <span class="k">if</span> missing:
+            <span class="k">raise</span> RuntimeError(f<span class="s">"required env missing: {', '.join(missing)}"</span>)
+        ...
+        session_id = repository.create_session(source=<span class="s">"scheduler"</span>, role=role, workspace_path=<span class="s">""</span>)
+        workspace = create_workspace(config.root, session_id)
+        task_id = repository.create_task(session_id=session_id, role=role, input_data={<span class="s">"job"</span>: job})</code></pre>
+<p>注目すべきは、<strong>DB へのセッション・タスク記録が executor 側で行われる</strong>点である。<code>create_session</code> / <code>create_task</code> を呼び、実行結果に応じて <code>finish_task</code> で成否を記録する。エンジン自身は DB に何も書かない。この責務分担は次章と第7章の主題である。</p>
+
+<h3>5.3 executor の無いジョブは skip</h3>
+<p>cron が一致しても executor が登録されていなければ、エンジンの <code>_dispatch</code> はそれを実行せず、明示的に「skip」として記録する。</p>
+<pre><code>    <span class="k">def</span> _dispatch(self, job: _JobSpec) -&gt; JobRunResult:
+        executor = self._executors.get(job.name)
+        <span class="k">if</span> executor <span class="k">is</span> None:
+            print(f<span class="s">"scheduler: no executor registered for job {job.name!r}; skipping"</span>, file=sys.stderr)
+            <span class="k">return</span> JobRunResult(job_name=job.name, status=<span class="s">"skipped"</span>, reason=<span class="s">"no executor"</span>)</code></pre>
+<p><code>stock-signal-fact-check</code> や <code>daily-digest-writer</code> はこの経路をたどる。YAML には定義が残っているが executor を持たないため、一致しても <code>status="skipped"</code>、<code>reason="no executor"</code> として返るだけである。理由は第8章で述べる。</p>
+
+<figure>
+<div class="mermaid">
+flowchart TB
+  J["ジョブ定義(YAML)"] --&gt; Q1{"enabled?"}
+  Q1 -- "false" --&gt; DROP["ジョブ一覧から除外"]
+  Q1 -- "true" --&gt; LOAD["エンジンに登録"]
+  LOAD --&gt; MATCH{"この分に cron 一致?"}
+  MATCH -- いいえ --&gt; WAIT["何もしない"]
+  MATCH -- はい --&gt; Q2{"executor 登録あり?"}
+  Q2 -- いいえ --&gt; SKIP["skipped(no executor)"]
+  Q2 -- はい --&gt; RUN["実行(セッション/タスク記録は executor 側)"]
+</div>
+<figcaption>図5-1 二重フィルタ。enabled と executor の両方を満たしたジョブだけが実行され、他は除外または skip される。</figcaption>
+</figure>
+
+<hr>
+
+<h2 id="c6">第6章 耐障害性 — 一つの失敗で時計を止めない</h2>
+<p>常駐する時計に最も求められるのは、<strong>止まらないこと</strong>である。あるジョブがバグや外部障害で例外を投げても、時計そのものが死んではならない。エンジンには、そのための仕掛けが4つある。二重の例外ガード、同一分の二重発火防止、リトライ、そして実行時間の打ち切りである。</p>
+
+<h3>6.1 二重の例外ガード</h3>
+<p>例外がループを殺さないよう、ガードは2層に置かれている。外側は第4.1節で見た <code>run_forever</code> の <code>try/except</code>(ループ全体を守る)。内側は <code>run_pending</code> のループ内、ジョブ1件ごとの <code>try/except</code> である。</p>
+<pre><code>        <span class="k">for</span> job <span class="k">in</span> self._jobs:
+            <span class="k">try</span>:
+                cron = self._crons[job.name]
+                <span class="k">if</span> <span class="k">not</span> cron.matches(current_minute):
+                    <span class="k">continue</span>
+                ...
+                results.append(self._dispatch(job))
+            <span class="k">except</span> Exception <span class="k">as</span> exc:  <span class="c"># one job's bug must not break the loop</span>
+                print(f<span class="s">"scheduler: job {job.name!r} raised unexpectedly: {exc}"</span>, file=sys.stderr)
+                results.append(JobRunResult(job_name=job.name, status=<span class="s">"failed"</span>, reason=str(exc)))</code></pre>
+<p>ジョブ単位で例外を捕らえ、失敗を <code>JobRunResult</code> に記録して<strong>次のジョブへ進む</strong>。コメントが方針を明言している — 「一つのジョブのバグがループを壊してはならない」。内側で捕り損ねた想定外の異常だけが外側のガードに到達し、それでもループは次の分へ生き延びる。障害の影響を1ジョブ・1分に閉じ込める設計である。</p>
+
+<h3>6.2 同一分の二重発火防止</h3>
+<p>単一スレッド逐次実行のため、ジョブの実行が時間的に重なることは原理的に起きない。したがって <code>concurrency_policy: forbid</code> は「同じ分に二度起動しない」ガードとして実装される。同じ分に <code>run_pending</code> が二度呼ばれても、二度目は skip される。</p>
+<pre><code>                <span class="k">if</span> job.concurrency_policy == <span class="s">"forbid"</span>:
+                    last = self._last_fired.get(job.name)
+                    <span class="k">if</span> last == current_minute:
+                        results.append(
+                            JobRunResult(job_name=job.name, status=<span class="s">"skipped"</span>, reason=<span class="s">"already fired this minute"</span>)
+                        )
+                        <span class="k">continue</span>
+
+                self._last_fired[job.name] = current_minute
+                results.append(self._dispatch(job))</code></pre>
+<p><code>_last_fired</code> という辞書に「そのジョブが最後に発火した分」を覚えておく。今処理中の分と一致していれば、既に撃ったとみなして skip。そうでなければ、発火時刻を記録してから <code>_dispatch</code> を呼ぶ。記録を<strong>実行の前に</strong>行うのが要点で、これにより実行中に再入しても二重には撃たない。</p>
+
+<h3>6.3 リトライ(backoff_limit)</h3>
+<p>実行本体が失敗したとき、すぐに諦めず数回やり直す。<code>backoff_limit</code> は「待ち時間なしの即時リトライ回数」として解釈される(ADR-022)。実装は <code>_dispatch</code> の中にある。</p>
+<pre><code>        attempts = <span class="n">0</span>
+        max_attempts = max(<span class="n">1</span>, job.backoff_limit + <span class="n">1</span>)
+        last_error: Exception | None = None
+
+        <span class="k">while</span> attempts &lt; max_attempts:
+            attempts += <span class="n">1</span>
+            <span class="k">try</span>:
+                <span class="k">if</span> job.active_deadline_seconds:
+                    self._run_with_deadline(executor, job.raw, job.active_deadline_seconds)
+                <span class="k">else</span>:
+                    executor(job.raw)
+                last_error = None
+                <span class="k">break</span>
+            <span class="k">except</span> Exception <span class="k">as</span> exc:  <span class="c"># recorded, not swallowed silently</span>
+                last_error = exc</code></pre>
+<p>試行回数の上限は <code>backoff_limit + 1</code>(最低でも1回は試す)。成功すれば <code>break</code> で抜け、失敗すれば例外を <code>last_error</code> に控えて次の試行へ。全試行が失敗して初めて、そのジョブは <code>failed</code> として記録される。<code>backoff_limit: 1</code>(既定)なら「本番1回 + リトライ1回」の計2回試すことになる。</p>
+
+<h3>6.4 実行時間の打ち切り(active_deadline_seconds)</h3>
+<p>外部 API を叩くジョブは、応答が返らずいつまでも終わらない危険がある。<code>active_deadline_seconds</code> は「この秒数を超えたら打ち切る」上限で、補助スレッドと <code>join(timeout)</code> で実装される。</p>
+<pre><code>    @staticmethod
+    <span class="k">def</span> _run_with_deadline(executor, job, deadline_seconds: float) -&gt; None:
+        error_box: list[BaseException] = []
+
+        <span class="k">def</span> _target() -&gt; None:
+            <span class="k">try</span>:
+                executor(job)
+            <span class="k">except</span> BaseException <span class="k">as</span> exc:
+                error_box.append(exc)
+
+        worker = threading.Thread(target=_target, daemon=True)
+        worker.start()
+        worker.join(timeout=deadline_seconds)
+        <span class="k">if</span> worker.is_alive():
+            <span class="k">raise</span> RuntimeError(<span class="s">"deadline exceeded"</span>)</code></pre>
+<p>executor を別スレッド(<code>worker</code>)で走らせ、親は <code>join(timeout=deadline_seconds)</code> で「最大その秒数だけ」待つ。時間内に終われば正常。時間切れでもスレッドがまだ生きていれば(<code>is_alive()</code>)、<code>deadline exceeded</code> として失敗にし、エンジンは次へ進む。ただし正直に述べると、Python にはスレッドを安全に強制終了する手段がないため、はみ出したワーカースレッドは daemon 化されたまま裏で走り続ける。これは MVP の既知の制約としてコメントに明記されている。</p>
+
+<figure>
+<div class="mermaid">
+flowchart TB
+  D["_dispatch(job)"] --&gt; A["試行 attempt を +1"]
+  A --&gt; DL{"deadline 設定あり?"}
+  DL -- はい --&gt; TH["別スレッドで実行&lt;br/&gt;join(timeout)"]
+  DL -- いいえ --&gt; DIR["その場で executor 実行"]
+  TH --&gt; R{"成功?"}
+  DIR --&gt; R
+  R -- はい --&gt; OK["succeeded"]
+  R -- "いいえ(例外/時間切れ)" --&gt; RETRY{"試行 &lt; backoff_limit+1?"}
+  RETRY -- はい --&gt; A
+  RETRY -- いいえ --&gt; FAIL["failed(理由を記録)"]
+</div>
+<figcaption>図6-1 _dispatch の耐障害フロー。deadline による打ち切りと backoff によるリトライを、失敗を握りつぶさず記録しながら回す。</figcaption>
+</figure>
+
+<hr>
+
+<h2 id="c7">第7章 責務の限定(ADR-022)</h2>
+<p>ここまでで気づいた読者もいよう。エンジンは「起動する・リトライする・結果を返す」ことはするが、<strong>ジョブが実際に何をするかは一切知らない</strong>し、<strong>DB にも何も書かない</strong>。これは偶然ではなく、ADR-022 が定めた明確な責務の限定である。</p>
+
+<h3>7.1 エンジンの責務は「発火・リトライ・記録の返却」だけ</h3>
+<p>ADR-022 はこう定める。スケジューラは「発火(firing)・リトライ(retrying)・結果返却(returning results)」のみを行う。実行本体は、既に認可・監査・認証情報分離が済んでいる<strong>既存の runner 経路に委ねる</strong>。実行結果の DB 記録は executor(実行本体)側の責務とする。エンジンのコメントもこれを裏書きする。</p>
+<pre><code><span class="c"># The engine itself records nothing in the DB: it is only responsible for</span>
+<span class="c"># firing, retrying, and returning results. Each executor owns its own</span>
+<span class="c"># session/task lifecycle (e.g. the claude-digest executor creates its own</span>
+<span class="c"># session+task with real outputs per attempt). Jobs with no executor are</span>
+<span class="c"># reported as skipped without touching the DB.</span></code></pre>
+<p>だからこそ第5.2節で見たように、<code>create_session</code> や <code>finish_task</code> は executor の中にあった。エンジンは <code>repository</code> を引数として受け取りこそすれ、自分では使わない(将来のための API 安定性として保持しているだけである)。</p>
+
+<figure>
+<div class="mermaid">
+flowchart LR
+  subgraph engine["SchedulerEngine(時計)"]
+    FIRE["発火"] --&gt; RETRY["リトライ"] --&gt; RET["結果を返す"]
+  end
+  subgraph exec["executor(実行本体 / 既存 runner 経路)"]
+    SESS["セッション/タスク作成"] --&gt; WORK["digest 生成・git push 等"] --&gt; REC["DB へ成否記録"]
+  end
+  RET -. "何を・どう実行するかは知らない" .- exec
+  engine --&gt; |"executor(job) を呼ぶだけ"| exec
+</div>
+<figcaption>図7-1 責務の分離(ADR-022)。時計は「いつ起動するか」だけを司り、「何をし・どう記録するか」は executor が持つ。</figcaption>
+</figure>
+
+<h3>7.2 なぜ分けるのか</h3>
+<p>この分離には実利がある。第一に、<strong>関心の分離</strong>。時計のロジック(cron 判定・リトライ・二重発火防止)と、業務ロジック(X 収集・digest 生成・git push)が混ざらないため、どちらも小さく保て、テストしやすい。第二に、<strong>認可と監査の一貫性</strong>。実行本体を既存 runner 経路に委ねることで、手動起動(<code>run-job</code>)でもスケジュール起動でも、同じ認可・同じ監査・同じ認証情報分離を通る。時計が別経路を新設して抜け道を作ることがない。第三に、<strong>正直さ</strong>。executor を持たないジョブは skip され、動いているふりをしない。</p>
+
+<hr>
+
+<h2 id="c8">第8章 Phase 3 ジョブの整理(ADR-029)</h2>
+<p>最後に、YAML に定義があるのに executor を持たないジョブ、すなわち第5.3節で skip されていた <code>stock-signal-fact-check</code> と <code>daily-digest-writer</code> の事情に触れておく。これは ADR-029 が記録した設計変更の名残である。</p>
+
+<h3>8.1 当初の3段連鎖と、その置き換え</h3>
+<p>roadmap の Phase 3 では当初、「research_queue に貯める → fact-check する → document_writer が digest を書く」という3つのスケジュールジョブの<strong>連鎖</strong>を想定していた。しかし開発が進む中で、各機能はより直接的な別経路に実装・統合された。ADR-029 はこの現実に合わせて Phase 3 ジョブを整理した(旧構想は superseded、すなわち差し替え)。</p>
+<table>
+<tr><th>当初の placeholder ジョブ</th><th>現在の扱い</th><th>統合先</th></tr>
+<tr><td><code>x-signal-collector</code></td><td>executor を配線し実ジョブ化</td><td><code>collect_x</code>(決定的な X シグナル登録)</td></tr>
+<tr><td><code>stock-signal-fact-check</code></td><td>定義は残すが executor 無し → skip</td><td><code>research stock</code>(J-Quants evidence)</td></tr>
+<tr><td><code>daily-digest-writer</code></td><td>定義は残すが executor 無し → skip</td><td>direct-MCP digest(ai-it / invest)</td></tr>
+</table>
+<p>収集・evidence 確認・digest 生成の各機能が既に別の形で実装・実運用されているため、旧 placeholder の3段連鎖は重複する。ADR-029 はこれらを統合先へ機能移管し、旧ジョブ2件は「定義は残すが executor を与えず、engine は skip する」状態に落ち着かせた。</p>
+
+<h3>8.2 なぜ定義を消さずに残すのか</h3>
+<p>単に削除しないのは、将来 research_queue を起点とした自動ファクトチェック連鎖が必要になったときの再検討の足場を残すためである。そして、この「executor 無し = 明示的 skip」という扱いは、第7章で見た ADR-022 の方針 — 未実装ジョブを見かけ上有効に見せない — と完全に整合している。定義が有効そうに見えても、executor が無ければ engine は正直に skip を報告する。運用者は <code>schedule run --once</code> の出力で <code>status=skipped reason=no executor</code> を目にし、実体の有無を誤解しない。</p>
+
+<figure>
+<div class="mermaid">
+flowchart TB
+  subgraph old["当初構想(superseded)"]
+    O1["x-signal-collector"] --&gt; O2["stock-signal-fact-check"] --&gt; O3["daily-digest-writer"]
+  end
+  subgraph now["現行アーキテクチャ"]
+    N1["collect_x&lt;br/&gt;(executor 配線・有効)"]
+    N2["research stock&lt;br/&gt;(J-Quants)"]
+    N3["direct-MCP digest&lt;br/&gt;(ai-it / invest)"]
+  end
+  O1 -. 統合 .-&gt; N1
+  O2 -. 統合 → skip .-&gt; N2
+  O3 -. 統合 → skip .-&gt; N3
+</div>
+<figcaption>図8-1 ADR-029 による整理。3段連鎖の各機能は独立した直接経路へ統合され、旧ジョブ2件は定義を残しつつ skip される。</figcaption>
+</figure>
+
+<hr>
+
+<h2 id="end">むすび</h2>
+<p>本書で読んだのは、cron 式パーサ約130行と、スケジューラエンジン約200行の、決して大きくないプログラムである。しかしその中に、定時実行に必要な要素が過不足なく現れていた。cron 式を整数の集合に展開し(第2章)、標準 cron の OR の癖まで忠実に再現し(第3章)、分境界で目覚める常駐ループがその集合と時刻を突き合わせ(第4章)、実体を持つジョブだけを起動し(第5章)、一つの失敗が全体を止めないよう幾重にも守る(第6章)。</p>
+<p>そして全体を貫くのは、<strong>責務を限定した時計</strong>という思想である(第7・8章)。エンジンは「いつ起動するか」だけを決定的なコードで司り、「何をするか」「どう記録するか」は既存の runner 経路と executor に委ねる。この分離が、認可と監査の一貫性を保ち、未実装ジョブを正直に skip させ、コードを小さく保つ。</p>
+<p>スケジューラの本質は、突き詰めれば一つの対比に行き着く。AI の振る舞いは非決定的である — 同じ入力でも出力は揺れ、時に誤り、時に予期せぬ挙動をする。しかしそれを<strong>いつ起動するか</strong>は、揺らいではならない。cron の集合演算も、分境界の <code>sleep</code> も、二重発火の防止も、すべては「決まった時刻に、確実に一度だけ」を保証するための決定的な機構である。<strong>決定的な時計が、非決定的な AI を定時に起動する</strong> — この一行が、scheduler と cron の全体を要約している。</p>
+
+</main>
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs";
+  function themeIsDark() {
+    var t = document.documentElement.getAttribute("data-theme");
+    if (t) return t === "dark";
+    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  }
+  mermaid.initialize({ startOnLoad: true, theme: themeIsDark() ? "dark" : "default", securityLevel: "loose" });
+</script>
+</body>
+</html>

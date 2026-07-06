@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ポリグロット設計と ADR を読む — なぜ Python と Go に分けたのか、決定をどう残すのか</title>
+<style>
+  :root {
+    --fg: #1a1f27; --bg: #ffffff; --muted: #5b6472; --accent: #4b4bcf;
+    --card: #f4f5fb; --border: #d9dced; --code-bg: #f4f5f8; --code-fg: #24292f;
+    --kw: #b3005a; --str: #0a7d3f; --com: #6a7480; --num: #8a4b00;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg: #e4e8ee; --bg: #121620; --muted: #9aa4b2; --accent: #9a9af0;
+            --card: #1a1f30; --border: #2c3350; --code-bg: #1b2130; --code-fg: #d6dce6;
+            --kw: #ff86b8; --str: #7fd69a; --com: #7d8896; --num: #e0a06a; }
+  }
+  :root[data-theme="dark"] {
+    --fg: #e4e8ee; --bg: #121620; --muted: #9aa4b2; --accent: #9a9af0;
+    --card: #1a1f30; --border: #2c3350; --code-bg: #1b2130; --code-fg: #d6dce6;
+    --kw: #ff86b8; --str: #7fd69a; --com: #7d8896; --num: #e0a06a;
+  }
+  :root[data-theme="light"] {
+    --fg: #1a1f27; --bg: #ffffff; --muted: #5b6472; --accent: #4b4bcf;
+    --card: #f4f5fb; --border: #d9dced; --code-bg: #f4f5f8; --code-fg: #24292f;
+    --kw: #b3005a; --str: #0a7d3f; --com: #6a7480; --num: #8a4b00;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 0 1.3rem 5rem; background: var(--bg); color: var(--fg);
+         font-family: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
+         line-height: 1.95; font-size: 16.5px; }
+  main { max-width: 780px; margin: 0 auto; }
+  h1 { font-size: 1.62rem; line-height: 1.5; margin: 2.8rem 0 1.4rem; font-weight: 700;
+       border-bottom: 3px double var(--border); padding-bottom: 1rem; }
+  h2 { font-size: 1.3rem; margin-top: 3.4rem; padding: .4rem 0 .35rem .7rem;
+       border-left: 5px solid var(--accent); background: var(--card); }
+  h3 { font-size: 1.08rem; margin-top: 2.4rem; color: var(--accent); font-weight: 700; }
+  p { margin: 1rem 0; text-align: justify; }
+  a { color: var(--accent); }
+  .lead { color: var(--muted); }
+  ul, ol { padding-left: 1.5rem; }
+  li { margin: .4rem 0; }
+  code { font-family: "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+         font-size: .85em; background: var(--code-bg); padding: .1em .38em; border-radius: 4px;
+         color: var(--code-fg); }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+        padding: 1rem 1.1rem; overflow-x: auto; margin: 1.4rem 0; line-height: 1.7; }
+  pre code { background: none; padding: 0; font-size: 13.5px; }
+  table { border-collapse: collapse; width: 100%; margin: 1.4rem 0; display: block; overflow-x: auto;
+          font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; font-size: .92rem; }
+  th, td { border: 1px solid var(--border); padding: .5rem .8rem; text-align: left; vertical-align: top; }
+  th { background: var(--card); }
+  .toc { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+         padding: 1rem 1.4rem; margin: 2rem 0;
+         font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; font-size: .95rem; }
+  .toc ol { padding-left: 1.3rem; } .toc li { margin: .25rem 0; }
+  .toc a { text-decoration: none; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 3rem 0; }
+  strong { font-weight: 700; }
+  /* code token colors */
+  .k { color: var(--kw); } .s { color: var(--str); } .c { color: var(--com); font-style: italic; }
+  .n { color: var(--num); }
+  .theme-toggle { position: fixed; top: .8rem; right: .8rem; background: var(--card);
+    border: 1px solid var(--border); color: var(--fg); border-radius: 6px; padding: .3rem .6rem;
+    font-size: .8rem; cursor: pointer; font-family: sans-serif; }
+  figure { margin: 1.8rem 0; }
+  .mermaid { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1.1rem; margin: 0; overflow-x: auto; text-align: center;
+    font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  figcaption { font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; font-size: .85rem;
+    color: var(--muted); text-align: center; margin-top: .5rem; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" onclick="(function(){var r=document.documentElement;var d=(r.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'))==='dark';r.setAttribute('data-theme',d?'light':'dark');})()">◐ 表示切替</button>
+<main>
+
+<h1>ポリグロット設計と ADR を読む<br><span style="font-size:.72em;font-weight:400;color:var(--muted)">— なぜ Python と Go に分けたのか、決定をどう残すのか —</span></h1>
+
+<p class="lead">本書は、7mimi-agent がなぜ一つの言語で書かれず、Python と Go という二つの言語に分かれているのか、そしてその分割をはじめとする設計上の決定が、どのようにして記録され後戻りを防いでいるのかを解説するものである。前半では「ポリグロット(多言語)設計」の分割線とその根拠を、後半では設計判断を残す仕組みである「ADR(Architecture Decision Record)」を、実際のディレクトリ構成と ADR 本文を引用しながら順に確認していく。口語的な読み物ではなく、順を追って理解を積み上げる教科書として記述する。</p>
+
+<div class="toc">
+<strong>目次</strong>
+<ol>
+<li><a href="#c1">第1章 ポリグロットとは — なぜ1言語でないのか</a></li>
+<li><a href="#c2">第2章 責務の分割線 — Python と Go の担当範囲</a></li>
+<li><a href="#c3">第3章 なぜ Go が境界に向くのか</a></li>
+<li><a href="#c4">第4章 なぜ Python がオーケストレーションに向くのか</a></li>
+<li><a href="#c5">第5章 両言語の境界における「契約」</a></li>
+<li><a href="#c6">第6章 ADR とは何か — フォーマットと実例</a></li>
+<li><a href="#c7">第7章 ADR が決定を残す仕組み</a></li>
+<li><a href="#c8">第8章 ADR 史の要約 — 主要な転換点</a></li>
+<li><a href="#end">むすび</a></li>
+</ol>
+</div>
+
+<hr>
+
+<h2 id="c1">第1章 ポリグロットとは — なぜ1言語でないのか</h2>
+
+<h3>1.1 ポリグロット設計の定義</h3>
+<p>ポリグロット(polyglot)とは「複数言語を操る」を意味する。ソフトウェア開発における polyglot 設計とは、一つのシステムを単一の言語で書き通すのではなく、部分ごとに最も適した言語を選んで組み合わせる方針を指す。7mimi-agent は Python と Go の二言語で構成される。アーキテクチャ文書は端的にこう述べる。「<code>7mimi-agent</code> は polyglot 構成にする」。</p>
+<p>一言語で書けばビルドも配布も単純になる。それでもあえて分けるのは、システムの中に<strong>性質のまったく異なる二種類の仕事</strong>が同居しているからである。片方は「何を調べ、どう書くか」を決める頭脳の仕事であり、もう片方は「認証情報を守り、通信を安全に中継する」境界の仕事である。前者は素早い試行錯誤とデータ処理を求め、後者はネットワーク処理の堅牢さと配布の軽さを求める。求めるものが違えば、向く道具も違う。</p>
+
+<h3>1.2 分割の一行要約</h3>
+<p>本書全体を貫く分割線を、先に一文で示す。<strong>Python はオーケストレーション・研究ロジック・Markdown 生成を担い、Go はセキュリティ境界のネットワークサービスを担う</strong>。この決定は ADR-012 に記録されている(第6章で全文を引用する)。</p>
+
+<figure>
+<div class="mermaid">
+flowchart TB
+  SYS["7mimi-agent という1システム"]
+  SYS --&gt; BRAIN["頭脳の仕事&lt;br/&gt;何を調べ・どう書くか"]
+  SYS --&gt; BOUND["境界の仕事&lt;br/&gt;認証情報を守り・通信を中継"]
+  BRAIN --&gt; PY["求める性質:&lt;br/&gt;素早い反復 / データ処理 / スケジューラ"]
+  BOUND --&gt; GO["求める性質:&lt;br/&gt;堅牢な中継 / 軽い配布 / 並行処理"]
+  PY --&gt; L1["Python が適する"]
+  GO --&gt; L2["Go が適する"]
+</div>
+<figcaption>図1-1 一つのシステムに同居する二種類の仕事。求める性質が異なるため、適する言語も分かれる。</figcaption>
+</figure>
+
+<h3>1.3 分割の代償と、それでも分ける理由</h3>
+<p>言語を分ければ代償も生じる。二つのビルド系(Python と Go)を維持し、二言語間で受け渡すデータの形をそろえ、開発者は両方を読めなければならない。それでも分割を選ぶのは、代償が<strong>境界という限定された面</strong>にしか現れないよう設計されているからである。Python と Go が接するのは HTTP の数本の経路だけであり、そこで交わす約束(第5章の「契約」)を固定しておけば、内部はそれぞれの言語で自由に書ける。分割線を正しい位置に引けば、多言語化の負担は最小に抑えられる。</p>
+
+<hr>
+
+<h2 id="c2">第2章 責務の分割線 — Python と Go の担当範囲</h2>
+
+<h3>2.1 アーキテクチャ文書が定める分担</h3>
+<p>担当範囲は設計文書 <code>docs/architecture/README.md</code> に明記されている。原文をそのまま引く。</p>
+<pre><code>Python:
+  - agent orchestration
+  - scheduler
+  - runner management
+  - research logic
+  - markdown/document generation
+  - config validation
+  - local development CLI
+
+Go:
+  - claude-proxy
+  - auth-proxy
+  - security-sensitive network boundary components</code></pre>
+<p>Python 側はエージェントの司令塔(orchestration)、定時実行(scheduler)、実行コンテナの管理(runner management)、調査ロジック(research logic)、そして生成物である Markdown の作成を担う。Go 側は二つの境界サービス — <code>claude-proxy</code> と <code>auth-proxy</code> — に代表される、<strong>セキュリティ上重要なネットワーク境界の部品</strong>だけを担う。この対応は、次に見るディレクトリ構成にそのまま現れる。</p>
+
+<h3>2.2 ディレクトリがそのまま責務を表す</h3>
+<p>リポジトリのディレクトリ構成を見れば、二言語の分担が物理的に分離されていることがわかる。Python のコードは <code>src/shichimimi_agent/</code> に、Go のコードは <code>services/</code> に、はっきりと別の場所へ置かれている。</p>
+<pre><code><span class="c"># Python — オーケストレーション / 研究 / 文書生成</span>
+src/shichimimi_agent/
+  ├─ cli.py          <span class="c"># ローカル開発 CLI</span>
+  ├─ config/         <span class="c"># YAML 読み込みと検証</span>
+  ├─ scheduler/      <span class="c"># 定時実行ループ</span>
+  ├─ orchestrator/   <span class="c"># 司令塔</span>
+  ├─ runner/         <span class="c"># 実行コンテナ管理</span>
+  ├─ research/       <span class="c"># 調査ロジック</span>
+  ├─ documents/      <span class="c"># Markdown 生成</span>
+  ├─ hooks/          <span class="c"># PreToolUse / PostToolUse</span>
+  └─ security/       <span class="c"># path / policy チェック</span>
+
+<span class="c"># Go — セキュリティ境界のネットワークサービス</span>
+services/
+  ├─ claude-proxy/   <span class="c"># Claude API 中継・APIキー境界</span>
+  ├─ auth-proxy/     <span class="c"># tool 認可 / git relay / MCP / Slack</span>
+  └─ egress-proxy/   <span class="c"># WebFetch の出口強制(ADR-025)</span></code></pre>
+<p>言語の境界がディレクトリの境界と一致している。<code>src/</code> を開けば Python の関心事(調査・生成・段取り)だけが、<code>services/</code> を開けば Go の関心事(中継・認可・監査)だけが目に入る。読み手は「どの言語で、何を探すか」を迷わない。</p>
+
+<figure>
+<div class="mermaid">
+flowchart LR
+  subgraph PY["src/shichimimi_agent/(Python)"]
+    direction TB
+    O["orchestrator / scheduler"]
+    R["research / documents"]
+    C["config / cli / hooks"]
+  end
+  subgraph GO["services/(Go)"]
+    direction TB
+    CP["claude-proxy"]
+    AP["auth-proxy"]
+    EP["egress-proxy"]
+  end
+  PY -- "HTTP 経由の&lt;br/&gt;数本の経路だけで接続" --&gt; GO
+  GO -- "🔑 認証情報はここだけが保持" --&gt; EXT["Anthropic / GitHub / X / J-Quants / Slack"]
+</div>
+<figcaption>図2-1 ディレクトリと言語の対応。Python(src/)と Go(services/)は HTTP の限られた経路でのみ接し、認証情報は Go 側の境界にしか存在しない。</figcaption>
+</figure>
+
+<h3>2.3 なぜ「境界」で切ったのか</h3>
+<p>分割線を機能(例:X 担当 vs 株担当)で引くこともできたはずだが、そうはしなかった。切ったのは<strong>セキュリティ境界</strong>である。理由は明快で、認証情報(APIキー・秘密鍵・トークン)を持つコードと、持たないコードを、言語のレベルで隔てたかったからである。AI が動く agent-runner と、それを支える Python のオーケストレーションは<strong>本物の認証情報を一切持たない</strong>。認証情報を保持し、通信の瞬間に代理で差し込むのは Go の境界サービスだけである。分割線をセキュリティ境界に一致させることで、「どこに秘密があるか」が「どの言語か」で判別できるようになる。</p>
+
+<hr>
+
+<h2 id="c3">第3章 なぜ Go が境界に向くのか</h2>
+<p>ADR-012 は Go を選んだ理由を「これらのプロキシはセキュリティに敏感なネットワーク境界の部品である。Go は HTTP リバースプロキシ、ストリーミング/SSE、並行処理、小さな静的バイナリ、コンテナ配備により適している」と述べる。本章では、この五つの適性を一つずつ確認する。</p>
+
+<h3>3.1 リバースプロキシとストリーミング</h3>
+<p>境界サービスの本業は「要求を受け、検査し、上流へ中継し、応答を返す」ことである。Go の標準ライブラリには <code>net/http</code> と <code>net/http/httputil.ReverseProxy</code> があり、HTTP サーバとリバースプロキシを外部依存なしで書ける。とりわけ大規模言語モデルの応答は、生成された順に少しずつ届く<strong>ストリーミング</strong>形式をとる。Go では応答を逐次読んで即座に書き出し、<code>http.Flusher</code> で「溜めずに今すぐ送れ」と指示するだけで、この逐次性を保ったまま中継できる。</p>
+<pre><code><span class="c">// 上流の応答を少しずつ読み、書くたびに Flush して逐次転送する</span>
+flusher, _ := w.(http.Flusher)
+buf := make([]<span class="k">byte</span>, 32*1024)
+<span class="k">for</span> {
+	n, err := body.Read(buf)
+	<span class="k">if</span> n &gt; 0 {
+		w.Write(buf[:n])
+		<span class="k">if</span> flusher != nil {
+			flusher.Flush()  <span class="c">// 溜めず即送信 → 逐次表示が成立</span>
+		}
+	}
+	<span class="k">if</span> err != nil { <span class="k">return</span> }
+}</code></pre>
+<p>この単純な部品が、ユーザから見た「AI が考えながら喋る」体験を成立させている。ストリーミングの中継はネットワークサービスの基本要件であり、Go はそれを標準機能だけで満たす。</p>
+
+<h3>3.2 静的バイナリと distroless コンテナ</h3>
+<p>Go はコンパイルすると<strong>単一の静的バイナリ</strong>になる。実行に外部のランタイム(Python インタプリタや Node.js のような)を必要としない。この性質が配布時に効く。境界サービスは <code>distroless</code>(最小構成)のコンテナイメージで配布され、そこには <code>curl</code> も <code>wget</code> も、シェルさえも入っていない。攻撃者が侵入しても使える道具がほとんどない、という防御である。</p>
+<p>ただし道具がないと、コンテナ実行環境がサービスの生存を確認する手段(ヘルスチェック)も失われる。そこで <code>claude-proxy</code> は、バイナリ自身が診断コマンドを兼ねる。</p>
+<pre><code><span class="k">func</span> main() {
+	<span class="k">if</span> len(os.Args) &gt; 1 && os.Args[1] == <span class="s">"-healthcheck"</span> {
+		runHealthcheck()  <span class="c">// 自分の /healthz を叩き 200 なら exit 0</span>
+		<span class="k">return</span>
+	}
+	<span class="c">// ... 通常のサーバ起動 ...</span>
+}</code></pre>
+<p><code>claude-proxy -healthcheck</code> と実行すると、通常のサーバ起動ではなく自己診断だけを行う。外部ツールに頼らず自足する — これは静的バイナリだからこそ自然に選べる設計である。</p>
+
+<h3>3.3 並行処理・タイムアウト・キャンセル</h3>
+<p>プロキシは同時に多数の要求を捌く。Go は<strong>ゴルーチン(goroutine)</strong>という軽量な並行実行の仕組みを言語に組み込んでおり、<code>http.ListenAndServe</code> は要求ごとに自動でゴルーチンを割り当てる。開発者はスレッドプールを自前で組む必要がない。加えて <code>context</code> による所要時間の打ち切り(タイムアウト)や取り消し(キャンセル)も標準で扱える。上流が応答しなければ待ち続けず <code>502 Bad Gateway</code> を返す、といった制御が素直に書ける。境界サービスに求められる「速く、止まらず、暴走しない」性質を、言語が下支えする。</p>
+
+<h3>3.4 小さく保てる監査・レート制御</h3>
+<p>境界サービスは監査(誰が何をしたか)とレート制御(呼びすぎを止める)を担う。Go では、これらを HTTP ハンドラの前後に挟む小さな「ミドルウェア」として書ける。ADR-012 の言葉を借りれば「監査/レート制限のミドルウェアを小さく保てる」。コードが小さいほど読みやすく、セキュリティの根幹を目視で検証できる。実際、<code>claude-proxy</code> は4ファイル・約200行に収まっている。</p>
+
+<figure>
+<div class="mermaid">
+flowchart TB
+  GO["Go が境界に向く5つの理由"]
+  GO --&gt; A["① HTTP リバースプロキシ&lt;br/&gt;net/http 標準で完結"]
+  GO --&gt; B["② ストリーミング/SSE&lt;br/&gt;Flusher で逐次転送"]
+  GO --&gt; C["③ 静的バイナリ&lt;br/&gt;distroless に載る"]
+  GO --&gt; D["④ 並行処理&lt;br/&gt;goroutine / context"]
+  GO --&gt; E["⑤ 小さな監査/レート制御&lt;br/&gt;目視で検証できる"]
+</div>
+<figcaption>図3-1 ADR-012 が挙げる Go の五つの適性。いずれも「ネットワーク境界を堅牢かつ軽量に保つ」ことに寄与する。</figcaption>
+</figure>
+
+<hr>
+
+<h2 id="c4">第4章 なぜ Python がオーケストレーションに向くのか</h2>
+<p>ADR-008 は初期実装言語を Python とした理由を「データ収集、SQLite、金融データ処理、スケジューラー、バッチ実行との相性がよく、まず自律リサーチの縦切りを作るため」と述べる。ADR-012 も「Python はエージェントのオーケストレーション、データ処理、研究ワークフロー、Markdown 生成により適している」と繰り返す。四つの適性を確認する。</p>
+
+<h3>4.1 データ処理と金融データ</h3>
+<p>本システムの本業は、X から集めた投稿や J-Quants から得た株価・財務を、正規化し、突き合わせ、要約することである。Python は文字列処理・辞書・リスト・日付計算といったデータ加工の標準機能が豊かで、SQLite も標準ライブラリで扱える。実際、正規化されたデータは <code>.data/normalized/app.sqlite</code> に蓄積される。金融データの前処理と蓄積を素直に書ける点が、まず Python を選ばせた。</p>
+
+<h3>4.2 スケジューラと研究ロジック</h3>
+<p>定時実行(cron)のループ、ジョブの発火・リトライ・結果記録は、外部依存なしに Python の標準ライブラリだけで書かれている(ADR-022)。研究ロジック — どのトピックを選び、どのシグナルを代表とし、どう要約へ渡すか — も、決定的なルールとして Python 側に置かれる。これらは頻繁に手が入る部分であり、次に述べる「素早い反復」が効く領域である。</p>
+
+<h3>4.3 Markdown 生成</h3>
+<p>成果物である digest は Markdown として書き出される。文字列を組み立て、テンプレートに流し込み、整形する — この種の文書生成は Python の得意分野である。生成された note は本リポジトリではなく別リポジトリ(<code>7milch/ai-it-research-notes</code>)へ push されるが、その文面を組み立てるのは Python の役割である。</p>
+
+<h3>4.4 素早い反復</h3>
+<p>オーケストレーションと研究ロジックは、仕様が固まりきらないまま試行錯誤で育つ領域である。Python はコンパイル不要で、書いて即実行し、結果を見て直せる。ADR-008 が「まず自律リサーチの縦切りを作るため」と述べるとおり、動くものを速く作って検証する段階では、この反復速度が決定的に重要だった。境界サービスのように「一度固めたら滅多に変えない・変えるなら慎重に」という Go 側の性質とは、対照的である。</p>
+
+<figure>
+<div class="mermaid">
+flowchart LR
+  subgraph PY["Python が向く領域"]
+    direction TB
+    P1["データ処理 / SQLite / 金融データ"]
+    P2["スケジューラ / 研究ロジック"]
+    P3["Markdown 生成"]
+    P4["素早い反復(試行錯誤で育つ)"]
+  end
+  subgraph GOSIDE["Go が向く領域"]
+    direction TB
+    G1["中継 / 認可 / 監査"]
+    G2["一度固めたら慎重に変更"]
+  end
+  PY -. "対照的な性質" .- GOSIDE
+</div>
+<figcaption>図4-1 Python と Go の適性の対照。頻繁に育つ頭脳の仕事は Python、滅多に変えない境界の仕事は Go。</figcaption>
+</figure>
+
+<hr>
+
+<h2 id="c5">第5章 両言語の境界における「契約」</h2>
+<p>Python と Go が別々に書かれても、二つが接する面では<strong>形をそろえた約束(契約)</strong>が要る。契約が食い違えば、片方の変更がもう片方を静かに壊す。7mimi-agent は四つの契約で境界をつないでいる。</p>
+
+<h3>5.1 セッショントークン</h3>
+<p>agent-runner(および Python オーケストレーション)は本物の認証情報を持たず、代わりに<strong>短命でロールに縛られたセッショントークン</strong>を持つ。Python 側はこのトークンを Bearer として送り、Go 側はそれを検証し、一致すれば本物の認証情報を代理で差し込む。トークンの発行は auth-proxy の <code>/session/issue</code> が行い、TTL は約35分、ロールが紐づく(ADR-028)。「Python は合言葉を送るだけ、Go が本物を持つ」という約束が、認証情報の分離を成立させている。</p>
+
+<h3>5.2 監査イベントの形</h3>
+<p>両言語とも監査ログを出すが、その<strong>形(記録できる項目)をそろえる</strong>。Go の <code>audit.Event</code> は、時刻・セッションID・ロール・メソッド・パス・上流ステータス・所要時間・判定・理由だけを持ち、会話内容や認証情報は<strong>型のレベルで持てない</strong>。Python 側の監査も同じ項目に限る。形をそろえることで、どちらの言語が出したログも同じ道具で読め、「秘密は残さない」原則が両側で守られる。</p>
+
+<h3>5.3 policy.Decision のミラー</h3>
+<p>最も明示的な契約が、認可判定の返り値である。Go の <code>policy.Decision</code> は、Python の <code>PolicyEngine</code> が返す判定の形を<strong>そのまま鏡写しにしている</strong>。ソース冒頭のコメントがそれを宣言している。</p>
+<pre><code><span class="c">// Decision mirrors the Python PolicyEngine decision shape so agent-runner</span>
+<span class="c">// hooks can treat local and remote decisions identically.</span>
+<span class="k">type</span> Decision <span class="k">struct</span> {
+	Decision      <span class="k">string</span> <span class="s">`json:"decision"`</span>
+	Reason        <span class="k">string</span> <span class="s">`json:"reason"`</span>
+	PolicyVersion <span class="k">string</span> <span class="s">`json:"policy_version"`</span>
+}</code></pre>
+<p><code>decision</code>(allow/block)・<code>reason</code>・<code>policy_version</code> の三つ組は、Python がローカルで判定しても、Go の auth-proxy がリモートで判定しても、<strong>同じ JSON の形</strong>で返る。だから agent-runner のフック(PreToolUse)は、判定がローカルかリモートかを気にせず同一に扱える。二言語の実装が異なっても、外から見た振る舞いは一つになる。これがミラーの意味である。</p>
+
+<h3>5.4 リダクションのパリティ</h3>
+<p>四つめが最も精妙な契約である。ログや出力から秘密を伏せる<strong>リダクション(redaction)の正規表現</strong>が、Python と Go で<strong>一致していなければならない</strong>。片方だけがあるパターンを見落とせば、そちら側から秘密が漏れる。設定の正本は <code>config/policy.yaml</code> の <code>redaction_policy.patterns</code> であり、Python の <code>Redactor</code> はこれを読み込み、Go の <code>xmcp.go</code> は同じパターンを RE2 構文へ移植して持つ。</p>
+<pre><code><span class="c">// policy.yaml の各パターンを Go 側へ移植。並び順も同一に保つ。</span>
+<span class="k">var</span> defaultRedactionPatterns = []redactionPattern{
+	{
+		name:  <span class="s">"env_assignment"</span>,
+		regex: regexp.MustCompile(<span class="s">`(?i)(api[_-]?key|secret|token|password)\s*=`</span>),
+	},
+	{
+		name:  <span class="s">"bearer_token"</span>,
+		regex: regexp.MustCompile(<span class="s">`Bearer\s+[A-Za-z0-9._~+/-]+=*`</span>),
+	},
+	<span class="c">// ... private_key, anthropic_key, ... 以下同順で続く</span>
+}</code></pre>
+<p>ここで重要なのは、この一致を<strong>人手の注意にではなく、テストに担保させている</strong>点である。<code>tests/test_redaction_parity.py</code> が「<code>policy.yaml</code> に追加された各パターンが Go 側 <code>defaultRedactionPatterns</code> へ移植されているか」を検査し、移植漏れがあればビルドを失敗させる。Go ソースのコメントも「このリストとパリティ検査テストを同期させ続けよ」と明記している。言語間の契約を、口約束ではなく機械が守る仕組みにしてある。</p>
+
+<figure>
+<div class="mermaid">
+flowchart TB
+  Y["config/policy.yaml&lt;br/&gt;redaction_policy.patterns(正本)"]
+  Y --&gt; PYR["Python: Redactor&lt;br/&gt;re.compile で読み込み"]
+  Y --&gt; GOR["Go: defaultRedactionPatterns&lt;br/&gt;RE2 へ移植(同順)"]
+  PYR --&gt; T["test_redaction_parity.py"]
+  GOR --&gt; T
+  T --&gt; V{"両者一致?"}
+  V -- いいえ --&gt; F["ビルド失敗&lt;br/&gt;移植漏れを検出"]
+  V -- はい --&gt; OK["契約成立"]
+</div>
+<figcaption>図5-1 リダクションのパリティ。正本は policy.yaml。Python と Go への反映が一致することをテストが機械的に担保する。</figcaption>
+</figure>
+
+<hr>
+
+<h2 id="c6">第6章 ADR とは何か — フォーマットと実例</h2>
+<p>ここまで見てきた「なぜ Python と Go に分けたか」は、誰かの記憶ではなく文書に残っている。その文書が <strong>ADR(Architecture Decision Record、アーキテクチャ決定記録)</strong>である。本章では ADR のフォーマットを、実物を引きながら説明する。</p>
+
+<h3>6.1 ADR の目的</h3>
+<p>ソフトウェアの設計では、無数の判断が下される。「なぜこうしたのか」を残さないと、後から見た者(未来の自分を含む)は理由を再構築できず、良かれと思って決定を覆し、同じ失敗を繰り返す。ADR は<strong>一つの決定につき一つの記録</strong>を残し、「何を決めたか(Decision)」と「なぜそう決めたか(Reason)」をセットで保存する。7mimi-agent では全 ADR が <code>docs/planning/adr.md</code> 一本に集約される。</p>
+
+<h3>6.2 フォーマット</h3>
+<p>本プロジェクトの ADR は次の三つの規律に従う。</p>
+<ul>
+<li><strong>見出し</strong>: <code>### ADR-NNN: &lt;title&gt;</code> の形式。<code>NNN</code> は連番。</li>
+<li><strong>本文</strong>: <code>Decision:</code>(決めたこと)と <code>Reason:</code>(理由)を必ず併記する。</li>
+<li><strong>追記のみ(append-only)</strong>: 既存 ADR を書き換えて消すのではなく、末尾に新しい番号で足していく。決定を覆す場合も、古い ADR は残し、新しい ADR がそれを廃止する。</li>
+</ul>
+<p>最も短い実例として、ADR-003 の全文を引く。</p>
+<pre><code><span class="c">### ADR-003: X is signal, not evidence</span>
+
+Decision: X情報は調査トリガーとして扱い、銘柄評価の根拠にはしない。
+Reason: Xには噂、ノイズ、ポジショントーク、誤情報が混ざるため。</code></pre>
+<p>わずか二行だが、「X を証拠にしない」という設計原則と、その理由が完結している。この決定は後続の多くの ADR(要約の扱い、Slack digest の免責、evidence 系 tool の分離)の前提として繰り返し参照される。次に、本書の主題である言語分割そのものを決めた ADR-012 を引く。</p>
+<pre><code><span class="c">### ADR-012: Implement proxy boundary services in Go</span>
+
+Decision: Implement claude-proxy and auth-proxy as Go services, while
+keeping agent orchestration and research logic in Python.
+
+Reason: These proxies are security-sensitive network boundary components.
+Go is better suited for HTTP reverse proxying, streaming/SSE, concurrency,
+small static binaries, and container deployment. Python remains better for
+agent orchestration, data processing, research workflows, and Markdown
+generation.</code></pre>
+<p>Decision が「何を(プロキシを Go で)」、Reason が「なぜ(境界部品であり、Go が中継・並行・配布に向くから)」を述べる。第2章から第4章までの内容は、要するにこの一つの ADR を敷衍したものである。</p>
+
+<figure>
+<div class="mermaid">
+flowchart TB
+  H["### ADR-NNN: title(連番の見出し)"]
+  H --&gt; D["Decision:&lt;br/&gt;何を決めたか"]
+  H --&gt; R["Reason:&lt;br/&gt;なぜそう決めたか"]
+  H --&gt; A["append-only&lt;br/&gt;末尾に追記・過去は消さない"]
+  D --&gt; ADRMD["docs/planning/adr.md&lt;br/&gt;全 ADR を集約(ADR-001..030)"]
+  R --&gt; ADRMD
+  A --&gt; ADRMD
+</div>
+<figcaption>図6-1 ADR のフォーマット。連番の見出し・Decision・Reason・追記のみ。すべて adr.md 一本に集約される。</figcaption>
+</figure>
+
+<hr>
+
+<h2 id="c7">第7章 ADR が決定を残す仕組み</h2>
+<p>フォーマットを定めただけでは、記録は書かれない。7mimi-agent は ADR を「書かれる」ものにするための仕組みを三つ備えている。</p>
+
+<h3>7.1 仕様駆動 — docs が仕様である</h3>
+<p>本プロジェクトでは <code>docs/</code> 以下の設計文書が<strong>仕様そのもの</strong>とされる。実装は思いつきではなく仕様に従って行う。CLAUDE.md はこう定める。「もし最近の ADR が古い設計文書と矛盾するなら、<strong>先に設計文書を ADR に合わせて更新し</strong>、それから更新後の文書に対して実装せよ。どちらにも従わないコードは決して書くな」。つまり ADR は文書の中で最上位の効力を持ち、設計文書は ADR に追随する。決定は宙に浮かず、必ず仕様に反映される。</p>
+
+<h3>7.2 Stop フックによる強制</h3>
+<p>規律は、人の善意だけに頼ると守られない。そこで機械的な強制が置かれている。アーキテクチャ・セキュリティ境界・言語/ツール選択・プラットフォーム方針を変える変更(具体的には <code>docs/architecture/</code>、<code>docs/detailed-design/</code>、<code>docs/workflows/</code>、<code>config/*.yaml</code> への変更)は、<strong>同じ作業セッション内で ADR に記録しなければならない</strong>。これを <code>.claude/hooks/adr-check.sh</code> という Stop フックが検査する。</p>
+<pre><code><span class="c"># 概念(Stop フックの判定)</span>
+対象パスが変更された &amp;&amp; adr.md が未更新
+  → 完了をブロック(「ADR を追記せよ」)
+そうでなければ
+  → 完了を許可</code></pre>
+<p>対象パスに変更があるのに <code>adr.md</code> が更新されていなければ、作業の「完了」そのものがブロックされる。開発者は ADR を追記するか、あるいは「なぜ ADR 不要か(誤字修正、既存 ADR で説明済み等)」を明示的に述べねばならない。決定の記録を、任意の作法から<strong>完了の必要条件</strong>へ引き上げている。</p>
+
+<h3>7.3 暫定を宣言し、後続が廃止する運用</h3>
+<p>append-only の妙が最もよく現れるのが、<strong>決定が覆るとき</strong>の扱いである。ADR は消さない。代わりに、暫定的な決定は<strong>自らを暫定と宣言</strong>し、後続の ADR がそれを正式に廃止する。ADR-018 がその実例である。この ADR は「notes repo への publish はホスト credential による暫定 local 構成とする」と定め、Reason の中で自ら「将来は document-store MCP + auth-proxy に credential を移す」と将来の置き換えを予告していた。そして後に、末尾へ次の一行が追記された。</p>
+<pre><code>廃止(2026-07-05): git relay の E2E 成功に伴い、本経路
+(--publish / runner からの writer.publish 呼び出し)は廃止した(ADR-020)。
+path policy 検証は security/path_policy.py として引き続き有効。</code></pre>
+<p>ADR-018 の本文はそのまま残り、末尾の追記が「この決定は ADR-020 に置き換えられた」と示す。読み手は、なぜ暫定構成が採られ、何をもって解消されたかという<strong>判断の履歴</strong>をたどれる。決定を消して現在だけを見せるのではなく、決定の変遷を残して「なぜ今こうなっているか」を説明する — これが append-only の狙いである。同じ運用は ADR-015(Python 製 MCP が ADR-023 で auth-proxy へ統合され撤去)などにも見られる。</p>
+
+<figure>
+<div class="mermaid">
+flowchart TB
+  CHG["docs/*.md や config/*.yaml を変更"]
+  CHG --&gt; STOP{"Stop フック:&lt;br/&gt;adr.md も更新した?"}
+  STOP -- いいえ --&gt; BLOCK["完了をブロック&lt;br/&gt;ADR 追記 or 不要理由を要求"]
+  STOP -- はい --&gt; DONE["完了を許可"]
+  DONE --&gt; SUP["決定が覆るとき:&lt;br/&gt;過去 ADR は消さず末尾に&lt;br/&gt;「廃止(ADR-NNN)」を追記"]
+</div>
+<figcaption>図7-1 決定を残す強制。Stop フックが記録なき完了を止め、覆る決定は削除でなく追記で表現される。</figcaption>
+</figure>
+
+<hr>
+
+<h2 id="c8">第8章 ADR 史の要約 — 主要な転換点</h2>
+<p>ADR-001 から ADR-030 までを通して読むと、このシステムが「ローカルで動く最小構成」から「認証情報を Go 境界に集約した自律システム」へと段階的に進化した軌跡が見える。主要な転換点を時系列でたどる。</p>
+
+<h3>8.1 五つの転換点</h3>
+<ul>
+<li><strong>ADR-006(ローカルで始め、コンテナ向けに設計)</strong>: MVP はローカル実行で始めるが、将来のセッション隔離コンテナへ移行可能な設計にする、という出発点。</li>
+<li><strong>ADR-012(境界を Go 化)</strong>: 本書の主題。プロキシ境界を Go に切り出し、polyglot 構成を確立した。</li>
+<li><strong>ADR-020(git relay)</strong>: git 書き込みを auth-proxy の Smart HTTP 中継に一本化し、GitHub App の短命トークンで注入。ADR-018 のホスト credential 依存を解消し、「credential-free runner」を書き込みまで拡張した。</li>
+<li><strong>ADR-023(credential 集約)</strong>: Python 製の x-mcp-readonly を撤去し、同じ MCP 契約を auth-proxy(Go)に再実装。X credential を Go 境界へ集約し、常駐プロセスを 4→3 に削減した。</li>
+<li><strong>ADR-028(MCP 直結)</strong>: X シグナル収集を、orchestrator の事前収集から、runner 内 Claude Code が auth-proxy の <code>/mcp</code> を直接叩く方式へ移行。認可を Go 境界のネットワーク呼び出し上のチェックへ移し、回避を難しくした。</li>
+</ul>
+
+<h3>8.2 転換の一貫した方向</h3>
+<p>これらの転換には一つの向きがある。<strong>認証情報と認可判定を、AI が動く面から遠ざけ、Go の境界サービスへ集約していく</strong>方向である。ADR-023 の Reason はこの動機を率直に述べる。「ADR-015 時点では『データ収集は Python』の整理だったが、実装後の運用で credential 分散と常駐プロセス数の方が支配的な関心事になったため方針を改訂する」。当初の分割線(データ収集は Python)が運用を経て見直され、より少ない境界に credential を集める方向へ調整された。ポリグロットの分割線は一度引いて終わりではなく、ADR を通じて更新され続ける生きた判断である。</p>
+
+<figure>
+<div class="mermaid">
+flowchart LR
+  A006["ADR-006&lt;br/&gt;ローカルで開始&lt;br/&gt;コンテナ向け設計"] --&gt; A012["ADR-012&lt;br/&gt;境界を Go 化&lt;br/&gt;polyglot 確立"]
+  A012 --&gt; A020["ADR-020&lt;br/&gt;git relay&lt;br/&gt;書き込みを境界へ"]
+  A020 --&gt; A023["ADR-023&lt;br/&gt;credential 集約&lt;br/&gt;Python MCP を Go へ"]
+  A023 --&gt; A028["ADR-028&lt;br/&gt;MCP 直結&lt;br/&gt;認可を Go 境界へ"]
+  A028 --&gt; DIR["一貫した向き:&lt;br/&gt;credential と認可を&lt;br/&gt;AI から遠い Go 境界へ集約"]
+</div>
+<figcaption>図8-1 ADR 史の主要な転換点。各決定は「認証情報と認可を Go の境界に集約する」という一貫した向きを持つ。</figcaption>
+</figure>
+
+<hr>
+
+<h2 id="end">むすび</h2>
+<p>本書は二つの問いを追った。「なぜ Python と Go に分けたのか」と「決定をどう残すのか」である。答えは互いに結びついていた。言語の分割は、機能ではなく<strong>セキュリティ境界</strong>に沿って引かれ、認証情報を持つ Go の境界サービスと、持たない Python のオーケストレーションを隔てた。Go はリバースプロキシ・ストリーミング・静的バイナリ・並行処理・distroless で境界に向き、Python はデータ処理・スケジューラ・研究ロジック・Markdown 生成・素早い反復でオーケストレーションに向く。二言語が接する面では、セッショントークン・監査イベントの形・<code>policy.Decision</code> のミラー・リダクションのパリティという四つの契約が、テストによって機械的に守られていた。</p>
+<p>そしてこの分割線そのものが、ADR という記録の仕組みによって残され、検証され、更新されてきた。<code>### ADR-NNN / Decision / Reason</code> という簡素なフォーマット、append-only の追記、Stop フックによる強制、暫定を宣言し後続が廃止する運用 — これらが、判断の履歴を消さずに保った。ADR-006 から ADR-028 へ至る転換は、credential を Go 境界へ集約するという一貫した向きを描いていた。</p>
+<p>言語をどう選ぶかも、決定をどう記録するかも、別々の作法ではない。どちらも「一貫した設計判断を、後から検証できる形で残す」という同じ規律の現れである。良い設計は、正しい分割線を引くことと、なぜそう引いたかを残すことの、両輪で成り立つ。</p>
+
+</main>
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs";
+  function themeIsDark() {
+    var t = document.documentElement.getAttribute("data-theme");
+    if (t) return t === "dark";
+    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  }
+  mermaid.initialize({ startOnLoad: true, theme: themeIsDark() ? "dark" : "default", securityLevel: "loose" });
+</script>
+</body>
+</html>

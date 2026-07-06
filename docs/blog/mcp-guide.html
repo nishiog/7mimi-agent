@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP と JSON-RPC 入門 — auth-proxy の /mcp を教材に</title>
+<style>
+  :root {
+    --fg: #1a1f27; --bg: #ffffff; --muted: #5b6472; --accent: #c2610a;
+    --card: #faf6f1; --border: #e4d8c8; --code-bg: #f6f3ee; --code-fg: #24292f;
+    --kw: #b3005a; --str: #0a7d3f; --com: #6a7480; --num: #8a4b00;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg: #e9e5df; --bg: #17130e; --muted: #b0a693; --accent: #f0a35a;
+            --card: #241d15; --border: #3a2f22; --code-bg: #201a12; --code-fg: #e2dccf;
+            --kw: #ff86b8; --str: #7fd69a; --com: #9c9070; --num: #e0a06a; }
+  }
+  :root[data-theme="dark"] {
+    --fg: #e9e5df; --bg: #17130e; --muted: #b0a693; --accent: #f0a35a;
+    --card: #241d15; --border: #3a2f22; --code-bg: #201a12; --code-fg: #e2dccf;
+    --kw: #ff86b8; --str: #7fd69a; --com: #9c9070; --num: #e0a06a;
+  }
+  :root[data-theme="light"] {
+    --fg: #1a1f27; --bg: #ffffff; --muted: #5b6472; --accent: #c2610a;
+    --card: #faf6f1; --border: #e4d8c8; --code-bg: #f6f3ee; --code-fg: #24292f;
+    --kw: #b3005a; --str: #0a7d3f; --com: #6a7480; --num: #8a4b00;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 0 1.3rem 5rem; background: var(--bg); color: var(--fg);
+         font-family: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
+         line-height: 1.95; font-size: 16.5px; }
+  main { max-width: 780px; margin: 0 auto; }
+  h1 { font-size: 1.62rem; line-height: 1.5; margin: 2.8rem 0 1.4rem; font-weight: 700;
+       border-bottom: 3px double var(--border); padding-bottom: 1rem; }
+  h2 { font-size: 1.3rem; margin-top: 3.4rem; padding: .4rem 0 .35rem .7rem;
+       border-left: 5px solid var(--accent); background: var(--card); }
+  h3 { font-size: 1.08rem; margin-top: 2.4rem; color: var(--accent); font-weight: 700; }
+  p { margin: 1rem 0; text-align: justify; }
+  a { color: var(--accent); }
+  .lead { color: var(--muted); }
+  ul, ol { padding-left: 1.5rem; }
+  li { margin: .4rem 0; }
+  code { font-family: "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+         font-size: .85em; background: var(--code-bg); padding: .1em .38em; border-radius: 4px;
+         color: var(--code-fg); }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+        padding: 1rem 1.1rem; overflow-x: auto; margin: 1.4rem 0; line-height: 1.7; }
+  pre code { background: none; padding: 0; font-size: 13.5px; }
+  table { border-collapse: collapse; width: 100%; margin: 1.4rem 0; display: block; overflow-x: auto;
+          font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; font-size: .92rem; }
+  th, td { border: 1px solid var(--border); padding: .5rem .8rem; text-align: left; vertical-align: top; }
+  th { background: var(--card); }
+  .toc { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+         padding: 1rem 1.4rem; margin: 2rem 0;
+         font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; font-size: .95rem; }
+  .toc ol { padding-left: 1.3rem; } .toc li { margin: .25rem 0; }
+  .toc a { text-decoration: none; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 3rem 0; }
+  strong { font-weight: 700; }
+  /* code token colors */
+  .k { color: var(--kw); } .s { color: var(--str); } .c { color: var(--com); font-style: italic; }
+  .n { color: var(--num); }
+  .theme-toggle { position: fixed; top: .8rem; right: .8rem; background: var(--card);
+    border: 1px solid var(--border); color: var(--fg); border-radius: 6px; padding: .3rem .6rem;
+    font-size: .8rem; cursor: pointer; font-family: sans-serif; }
+  figure { margin: 1.8rem 0; }
+  .mermaid { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1.1rem; margin: 0; overflow-x: auto; text-align: center;
+    font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  figcaption { font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; font-size: .85rem;
+    color: var(--muted); text-align: center; margin-top: .5rem; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" onclick="(function(){var r=document.documentElement;var d=(r.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'))==='dark';r.setAttribute('data-theme',d?'light':'dark');})()">◐ 表示切替</button>
+<main>
+
+<h1>MCP と JSON-RPC 入門<br><span style="font-size:.72em;font-weight:400;color:var(--muted)">— auth-proxy の /mcp を教材に —</span></h1>
+
+<p class="lead">本書は、7mimi-agent の境界サービス <strong>auth-proxy</strong> が備える <code>/mcp</code> エンドポイント(<code>internal/xmcp</code>)を題材に、MCP(Model Context Protocol)と、その土台である JSON-RPC 2.0 の仕組みを、前提知識のない読者に向けて解説するものである。「AIに外部の道具を与える」とはプロトコルとしてどういうことか、そしてその入り口をどう安全な境界にするのかを、実際のGoおよびPythonのソースコードを引用しながら、一つずつ確認していく。口語的な読み物ではなく、順を追って理解を積み上げる教科書として記述する。</p>
+
+<div class="toc">
+<strong>目次</strong>
+<ol>
+<li><a href="#c1">第1章 MCPとは何か</a></li>
+<li><a href="#c2">第2章 JSON-RPC 2.0 の最小知識</a></li>
+<li><a href="#c3">第3章 3つのメソッド — initialize / tools/list / tools/call</a></li>
+<li><a href="#c4">第4章 Streamable HTTP transport と Claude Code 直結</a></li>
+<li><a href="#c5">第5章 ツールの登録と拡張</a></li>
+<li><a href="#c6">第6章 認可 — ロールで能力を絞る</a></li>
+<li><a href="#c7">第7章 コスト上限 — ハードな呼び出しキャップ</a></li>
+<li><a href="#c8">第8章 応答の正規化・redaction・秘密の非漏洩</a></li>
+<li><a href="#c9">第9章 Python クライアントからの呼び出し</a></li>
+<li><a href="#end">むすび</a></li>
+</ol>
+</div>
+
+<hr>
+
+<h2 id="c1">第1章 MCPとは何か</h2>
+
+<h3>1.1 AIに「外部の道具」を与える標準</h3>
+<p>大規模言語モデル(LLM)は、それ自身の内部知識だけで文章を生成する。しかし現実の仕事では、最新のX(旧Twitter)の投稿を検索したり、株価データを取り出したりと、モデルの外側にあるデータや機能へアクセスする必要がある。この「モデルの外側の能力」をモデルに接続するための取り決めが <strong>MCP(Model Context Protocol)</strong> である。</p>
+<p>MCPは、AIアプリケーション(クライアント)と、道具を提供する側(サーバ)の間の会話のしかたを定める。サーバは自分が提供できる<strong>ツール(tool)</strong>の一覧を広告し、クライアントはその中から必要なものを選んで実行を依頼する。重要なのは、これが特定の製品に固有の仕組みではなく、<strong>共通の規約</strong>だという点である。同じ規約に従うサーバであれば、クライアントは中身の実装を知らずとも接続できる。</p>
+<p>本書が教材とする <code>internal/xmcp</code> は、まさにこのMCPサーバの一実装である。ソース冒頭のコメントが役割を端的に述べている。</p>
+<pre><code><span class="c">// Package xmcp implements the x-mcp-readonly MCP protocol contract (ADR-015,</span>
+<span class="c">// ADR-023) as a Go handler inside auth-proxy. It exposes exactly four</span>
+<span class="c">// read-only tools for the X API (x.search_posts_recent, x.get_posts,</span>
+<span class="c">// x.get_users, x.get_users_by_username) over JSON-RPC 2.0 at POST /mcp.</span>
+<span class="k">package</span> xmcp</code></pre>
+<p>すなわち、Xの読み取り専用ツールを4つ、<strong>JSON-RPC 2.0</strong> という形式で、<code>POST /mcp</code> というHTTPの入り口で提供するサーバである。次章以降、この一文に含まれる要素を順に解きほぐしていく。</p>
+
+<figure>
+<div class="mermaid">
+flowchart LR
+  subgraph client["AIアプリ(クライアント)"]
+    AI["Claude(LLM)&lt;br/&gt;外部データを持たない"]
+  end
+  subgraph server["MCPサーバ(auth-proxy /mcp)"]
+    S["xmcp ハンドラ&lt;br/&gt;ツールを広告し実行する"]
+  end
+  AI -- "①能力は?(tools/list)" --&gt; S
+  AI -- "②これを実行して(tools/call)" --&gt; S
+  S -- "🔑 認証を注入" --&gt; EXT["X API / J-Quants API"]
+</div>
+<figcaption>図1-1 MCPの立ち位置。サーバが「使える道具」を広告し、クライアントが選んで実行を依頼する。外部APIの認証情報はサーバ側だけが持つ。</figcaption>
+</figure>
+
+<h3>1.2 なぜ「境界」に置くのか</h3>
+<p>7mimi-agent では、このMCPサーバを認証情報を保持する境界サービス auth-proxy の内側に置いている。Xの認証情報(<code>X_BEARER_TOKEN</code>)はauth-proxyのプロセスだけが読み、AIが動くコンテナには一切渡さない。コメントもそれを明言している。</p>
+<pre><code><span class="c">// The X API credential (X_BEARER_TOKEN) is read from this process's</span>
+<span class="c">// environment only, per request, and is never forwarded to callers or</span>
+<span class="c">// logged. stdlib only, no third-party dependencies.</span></code></pre>
+<p>つまりMCPは、単に「AIに能力を与える」だけでなく、「その能力を安全な境界の内側でだけ実行させる」設計の要にもなっている。AIは「何をしたいか」を宣言し、境界サービスが「してよいか」「どう外部と繋ぐか」を決める。この構図は本書を貫くので、最初に頭に置いておいてほしい。</p>
+
+<hr>
+
+<h2 id="c2">第2章 JSON-RPC 2.0 の最小知識</h2>
+
+<h3>2.1 メソッド・パラメータ・ID</h3>
+<p>MCPの会話は <strong>JSON-RPC 2.0</strong> という汎用の手続き呼び出し形式に乗る。RPCは Remote Procedure Call(遠隔手続き呼び出し)の略で、「離れた相手の関数を呼ぶ」ことを意味する。JSON-RPCは、その呼び出しをJSONというデータ形式で表現する取り決めである。要求(リクエスト)は次の4つの要素で成り立つ。</p>
+<ul>
+<li><code>jsonrpc</code>: 規約のバージョン。常に文字列 <code>"2.0"</code>。</li>
+<li><code>method</code>: 呼びたい手続きの名前。例:<code>"tools/list"</code>。</li>
+<li><code>params</code>: 手続きに渡す引数。無い場合もある。</li>
+<li><code>id</code>: この要求を識別する番号や文字列。応答はこの <code>id</code> を返し、どの要求への返事かを対応づける。</li>
+</ul>
+<p>xmcp が受け取る要求の型定義を見ると、この4要素がそのまま構造体になっている。</p>
+<pre><code><span class="k">type</span> jsonrpcRequest <span class="k">struct</span> {
+	JSONRPC <span class="k">string</span>          <span class="s">`json:"jsonrpc"`</span>
+	ID      <span class="k">any</span>             <span class="s">`json:"id"`</span>
+	Method  <span class="k">string</span>          <span class="s">`json:"method"`</span>
+	Params  json.RawMessage <span class="s">`json:"params"`</span>
+}</code></pre>
+<p>右側の <code>`json:"..."`</code> はタグと呼ばれ、JSONのキー名とGoのフィールドを対応づける。<code>Params</code> が <code>json.RawMessage</code>(生のJSONのまま保持)になっているのは、メソッドごとに引数の形が違うため、ここでは解釈せず後で必要な型に変換するためである。</p>
+
+<figure>
+<div class="mermaid">
+flowchart LR
+  subgraph req["要求(Request)"]
+    R1["jsonrpc: 2.0"]
+    R2["method: tools/call"]
+    R3["params: {name, arguments}"]
+    R4["id: 3"]
+  end
+  subgraph res["応答(Response)"]
+    S1["jsonrpc: 2.0"]
+    S2["id: 3(要求と同じ)"]
+    S3["result: {...} または error: {code, message}"]
+  end
+  req -- "同じ id で対応づけ" --&gt; res
+</div>
+<figcaption>図2-1 JSON-RPC の要求と応答。id が両者を紐づけ、応答は result か error のどちらか一方を持つ。</figcaption>
+</figure>
+
+<h3>2.2 結果とエラー</h3>
+<p>応答は、成功なら <code>result</code>、失敗なら <code>error</code> を持つ。両方を同時に持つことはない。xmcp の応答型と、それを作る2つの補助関数を見る。</p>
+<pre><code><span class="k">type</span> jsonrpcResponse <span class="k">struct</span> {
+	JSONRPC <span class="k">string</span>        <span class="s">`json:"jsonrpc"`</span>
+	ID      <span class="k">any</span>           <span class="s">`json:"id"`</span>
+	Result  <span class="k">any</span>           <span class="s">`json:"result,omitempty"`</span>
+	Error   *jsonrpcError <span class="s">`json:"error,omitempty"`</span>
+}
+
+<span class="k">func</span> errorResponse(id <span class="k">any</span>, code <span class="k">int</span>, message <span class="k">string</span>) jsonrpcResponse {
+	<span class="k">return</span> jsonrpcResponse{JSONRPC: <span class="s">"2.0"</span>, ID: id, Error: &jsonrpcError{Code: code, Message: message}}
+}</code></pre>
+<p><code>omitempty</code> は「値が空なら出力しない」という指定である。成功時は <code>Error</code> が <code>nil</code> なので出力されず、失敗時は <code>Result</code> が出力されない。こうして「どちらか一方」が自然に表現される。</p>
+<p>エラーには数値の<strong>コード</strong>が付く。JSON-RPC 2.0 は標準的なコードを定めており、xmcp はそのうち3つを使う。</p>
+<pre><code><span class="k">const</span> (
+	jsonrpcParseError    = <span class="n">-32700</span>
+	jsonrpcMethodMissing = <span class="n">-32601</span>
+	jsonrpcInvalidParams = <span class="n">-32602</span>
+)</code></pre>
+<table>
+<tr><th>コード</th><th>意味</th><th>xmcp での用例</th></tr>
+<tr><td><code>-32700</code></td><td>Parse error(JSONとして壊れている)</td><td>ボディが空、またはJSONとして解釈できないとき</td></tr>
+<tr><td><code>-32601</code></td><td>Method not found(未知のメソッド)</td><td>未知メソッド、および「ロールに許可されないツール」</td></tr>
+<tr><td><code>-32602</code></td><td>Invalid params(引数が不正)</td><td>未登録のツール名、呼び出し上限の超過</td></tr>
+</table>
+<p>ここで一つ、7mimi-agent 独特の設計判断がある。エラーであってもHTTPのステータスは <code>200 OK</code> で返す。失敗はHTTP層ではなくJSON-RPC層の <code>error</code> フィールドで表す。壊れたJSONを受け取ったときの分岐がそれを示す。</p>
+<pre><code>	<span class="k">var</span> req jsonrpcRequest
+	<span class="k">if</span> len(body) == <span class="n">0</span> || json.Unmarshal(body, &req) != nil {
+		h.writeJSON(w, http.StatusOK, errorResponse(nil, jsonrpcParseError, <span class="s">"parse error"</span>))
+		<span class="k">return</span>
+	}</code></pre>
+<p><code>json.Unmarshal</code> はJSONをGoの構造体へ変換する関数で、失敗すれば非 <code>nil</code> のエラーを返す。ボディが空か変換に失敗すれば、<code>id</code> を <code>nil</code> にした <code>-32700</code> を、しかしHTTPは <code>200</code> で返す。要求のどれがどう失敗したかは、あくまでJSON-RPCの語彙で伝えるのである。</p>
+
+<hr>
+
+<h2 id="c3">第3章 3つのメソッド — initialize / tools/list / tools/call</h2>
+<p>MCPの中核は、たった3つのメソッドである。<strong>握手(initialize)・能力の広告(tools/list)・実行(tools/call)</strong>。xmcp の <code>handlePost</code> は、要求のメソッド名でこの3つ(と通知1つ)に振り分ける。</p>
+<pre><code>	<span class="k">switch</span> req.Method {
+	<span class="k">case</span> <span class="s">"initialize"</span>:
+		<span class="c">// ... プロトコル情報を返す ...</span>
+	<span class="k">case</span> <span class="s">"notifications/initialized"</span>:
+		w.WriteHeader(http.StatusNoContent)
+	<span class="k">case</span> <span class="s">"tools/list"</span>:
+		<span class="c">// ... ツール一覧を返す ...</span>
+	<span class="k">case</span> <span class="s">"tools/call"</span>:
+		h.handleToolsCall(w, req, role, token, start)
+	<span class="k">default</span>:
+		<span class="c">// ... -32601 unknown method ...</span>
+	}</code></pre>
+<p>未知のメソッドは <code>default</code> に落ち、<code>-32601</code>(method not found)で返る。以下、3つを順に見る。</p>
+
+<h3>3.1 initialize — ハンドシェイク</h3>
+<p>接続の最初に、クライアントとサーバが互いの素性とバージョンを確認する。これがハンドシェイク(握手)である。xmcp の応答はこうである。</p>
+<pre><code>	<span class="k">case</span> <span class="s">"initialize"</span>:
+		h.writeJSON(w, http.StatusOK, resultResponse(req.ID, <span class="k">map</span>[<span class="k">string</span>]<span class="k">any</span>{
+			<span class="s">"protocolVersion"</span>: protocolVersion,
+			<span class="s">"capabilities"</span>:    <span class="k">map</span>[<span class="k">string</span>]<span class="k">any</span>{<span class="s">"tools"</span>: <span class="k">map</span>[<span class="k">string</span>]<span class="k">any</span>{}},
+			<span class="s">"serverInfo"</span>:      <span class="k">map</span>[<span class="k">string</span>]<span class="k">any</span>{<span class="s">"name"</span>: serverName, <span class="s">"version"</span>: serverVersion},
+		}))</code></pre>
+<p>返すのは3つである。<code>protocolVersion</code>(このサーバが話すMCPの版、ここでは <code>"2025-03-26"</code>)、<code>capabilities</code>(能力の宣言。<code>tools</code> を持つことを示す)、<code>serverInfo</code>(サーバ名 <code>x-mcp-readonly</code> とバージョン)。クライアントはこれを見て、以降どう会話すればよいかを判断する。</p>
+<p>握手の直後、クライアントは <code>notifications/initialized</code> という<strong>通知</strong>を送る。通知は <code>id</code> を持たず、応答を期待しない一方向のメッセージである。xmcp はこれに <code>204 No Content</code>(本文なし)だけを返す。</p>
+
+<h3>3.2 tools/list — 能力の広告</h3>
+<p>クライアントが「あなたは何ができるのか」を尋ねるのが <code>tools/list</code> である。サーバは提供するツールの一覧を、名前・説明・入力スキーマ付きで返す。ツール定義の型は次のとおりである。</p>
+<pre><code><span class="c">// Tool describes an MCP tool definition returned from tools/list.</span>
+<span class="k">type</span> Tool <span class="k">struct</span> {
+	Name        <span class="k">string</span>         <span class="s">`json:"name"`</span>
+	Description <span class="k">string</span>         <span class="s">`json:"description"`</span>
+	InputSchema <span class="k">map</span>[<span class="k">string</span>]<span class="k">any</span> <span class="s">`json:"inputSchema"`</span>
+}</code></pre>
+<p><code>InputSchema</code> は、そのツールがどんな引数を取るかを JSON Schema という形式で記述したものである。たとえば <code>x.search_posts_recent</code> は文字列の <code>query</code>(必須)と、10〜100の整数 <code>max_results</code> を取る、と広告される。クライアント側のLLMはこのスキーマを読んで、正しい形の引数を組み立てる。<code>tools/list</code> の実体は、後述する <code>toolsForRole</code> が返すツール群をそのまま包むだけである。</p>
+
+<h3>3.3 tools/call — 実行</h3>
+<p>クライアントが実際に道具を使うのが <code>tools/call</code> である。<code>params</code> にツール名と引数を載せる。xmcp はそれを次の型で受け取る。</p>
+<pre><code><span class="k">type</span> toolsCallParams <span class="k">struct</span> {
+	Name      <span class="k">string</span>         <span class="s">`json:"name"`</span>
+	Arguments <span class="k">map</span>[<span class="k">string</span>]<span class="k">any</span> <span class="s">`json:"arguments"`</span>
+}</code></pre>
+<p>この後、名前の存在確認・認可・上限確認を経て、実際にXのAPIを叩き、結果を <code>result</code> として返す。その詳細は第6章以降で扱う。まずは3つのメソッドが一連の会話として、どういう順で流れるかを見よう。</p>
+
+<figure>
+<div class="mermaid">
+sequenceDiagram
+  participant C as クライアント(Claude)
+  participant S as MCPサーバ(/mcp)
+  C-&gt;&gt;S: initialize(protocolVersion, clientInfo)
+  S--&gt;&gt;C: result(protocolVersion, capabilities, serverInfo)
+  C-&gt;&gt;S: notifications/initialized(通知・id なし)
+  S--&gt;&gt;C: 204 No Content
+  C-&gt;&gt;S: tools/list
+  S--&gt;&gt;C: result(tools: [x.search_posts_recent, ...])
+  C-&gt;&gt;S: tools/call(name, arguments)
+  S--&gt;&gt;C: result(content: [{type:text, text:...}])
+</div>
+<figcaption>図3-1 MCPの基本的な会話の流れ。握手 → 能力の確認 → 実行、という順序をとる。</figcaption>
+</figure>
+
+<hr>
+
+<h2 id="c4">第4章 Streamable HTTP transport と Claude Code 直結</h2>
+
+<h3>4.1 POST /mcp と Bearer 認証</h3>
+<p>JSON-RPCのメッセージは、何かの通信路(transport)に乗って運ばれる。MCPが標準として定める通信路の一つが <strong>Streamable HTTP</strong> であり、その実体は単純に「<code>/mcp</code> というパスへの <code>POST</code> リクエスト」である。xmcp のルート登録を見る。</p>
+<pre><code><span class="k">func</span> (h *Handler) Routes() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc(<span class="s">"POST /mcp"</span>, h.handlePost)
+	mux.HandleFunc(<span class="s">"/mcp"</span>, h.handleOther)
+	<span class="k">return</span> mux
+}</code></pre>
+<p><code>POST /mcp</code> が本体の処理へ、それ以外のメソッド(GETなど)は <code>handleOther</code> へ振り分けられ、<code>405 Method Not Allowed</code> を返す。JSON-RPCのやりとりはすべて <code>POST /mcp</code> の一点に集約されている。</p>
+<p>この入り口は、他の境界(git中継)と同じく <code>Authorization: Bearer &lt;token&gt;</code> ヘッダで保護される。<code>handlePost</code> の冒頭が最初の関門である。</p>
+<pre><code>	ok, role := h.authorizeToken(r)
+	<span class="k">if</span> !ok {
+		http.Error(w, <span class="s">"unauthorized"</span>, http.StatusUnauthorized)
+		<span class="k">return</span>
+	}</code></pre>
+<p>トークンを検証できなければ、JSON-RPCの土俵に上がる前に <code>401 Unauthorized</code> で弾く。これは fail-closed、すなわち「条件を満たさない要求は先へ進ませない」設計である。<code>authorizeToken</code> が返す <code>role</code> の意味は、第6章で詳しく扱う。</p>
+
+<figure>
+<div class="mermaid">
+flowchart TB
+  IN["POST /mcp 受信"] --&gt; A{"Bearer トークンを検証できる?"}
+  A -- いいえ --&gt; U["401 Unauthorized&lt;br/&gt;(JSON-RPC に入らず終了)"]
+  A -- はい --&gt; B{"ボディは正しい JSON?"}
+  B -- いいえ --&gt; PE["error -32700 parse error&lt;br/&gt;(HTTP は 200)"]
+  B -- はい --&gt; SW["method で振り分け&lt;br/&gt;initialize / tools/list / tools/call"]
+</div>
+<figcaption>図4-1 Streamable HTTP の入り口。まずBearer認証、次にJSONの妥当性、それからJSON-RPCのメソッド振り分けへ進む。</figcaption>
+</figure>
+
+<h3>4.2 Claude Code の --mcp-config 直結(ADR-028)</h3>
+<p>この <code>/mcp</code> は、runner コンテナの中で動く Claude Code が直接叩く。ADR-028 が定めた設計である。従来はオーケストレータが事前にXの投稿を収集してファイルに投入していたが、これを廃し、Claude Code 自身が <code>--mcp-config</code> でMCPサーバを登録し、必要なときに <code>tools/call</code> でX信号を取りに行く方式へ移行した。ADR-028 の決定を引く。</p>
+<pre><code>Decision: ai-it-x-daily-digest の X シグナル収集を、orchestrator の
+事前収集から、runner 内 Claude Code が auth-proxy の /mcp を Streamable
+HTTP MCP(--mcp-config、Authorization: Bearer &lt;session token&gt;)で直接
+叩く方式へ移行する。</code></pre>
+<p>ここで重要なのは、AIが「自分で使う道具を選ぶ」(自己選択)ことを許しながら、なお安全である理由である。ADR-028 は、<code>/mcp</code> に載せるのは<strong>読み取り専用</strong>の evidence/signal ツールだけで、書き込みを伴う境界(git中継、Slack通知)はこの自己選択サーフェスに<strong>絶対に載せない</strong>、という不変条件を置いている。AIが自由に選べるのは「読むこと」だけであり、「書くこと」は別の、認証情報が分離された境界に留まる。だからこそ直結を許せる。</p>
+
+<figure>
+<div class="mermaid">
+flowchart LR
+  subgraph runner["runner コンテナ"]
+    CC["Claude Code&lt;br/&gt;--mcp-config で /mcp を登録&lt;br/&gt;セッショントークンのみ保持"]
+  end
+  subgraph ap["auth-proxy"]
+    MC["/mcp(read-only)&lt;br/&gt;X signal / J-Quants evidence"]
+    GIT["/git(書き込み)&lt;br/&gt;🔑 別サーフェス"]
+    SL["/v1/slack/notify(書き込み)&lt;br/&gt;🔑 別サーフェス"]
+  end
+  CC -- "自己選択でツール実行" --&gt; MC
+  MC -. "自己選択サーフェスには載せない(不変条件)" .-x GIT
+  MC -. "同上" .-x SL
+</div>
+<figcaption>図4-2 Claude Code 直結。AIが自由に選べるのは read-only の /mcp だけで、書き込み境界は別サーフェスに隔離される。</figcaption>
+</figure>
+
+<hr>
+
+<h2 id="c5">第5章 ツールの登録と拡張</h2>
+
+<h3>5.1 組み込みの X 読み取り4種</h3>
+<p>xmcp が最初から備えるのは、Xの読み取り専用ツール4つである。パッケージ変数 <code>tools</code> に定義されており、名前だけ挙げると次のとおりである。</p>
+<ul>
+<li><code>x.search_posts_recent</code> — 最近の投稿を検索する。</li>
+<li><code>x.get_posts</code> — ID を指定して投稿を取得する。</li>
+<li><code>x.get_users</code> — ID を指定してユーザを取得する。</li>
+<li><code>x.get_users_by_username</code> — ユーザ名を指定してユーザを取得する。</li>
+</ul>
+<p>いずれも「取得・検索」だけで、投稿・削除といった書き込み系は存在しない。読み取り専用(read-only)という性質は、ここで名前の集合そのものによって担保されている。</p>
+
+<h3>5.2 ExtraTool による差し込み(ADR-027)</h3>
+<p>xmcp は、Xツールだけに閉じていない。<strong>他の認証情報の保有者</strong>が、同じ <code>/mcp</code> エンドポイントに自分のツールを追加できる仕組みを持つ。それが <code>ExtraTool</code> である。</p>
+<pre><code><span class="c">// ExtraTool pairs a tool definition with its handler, allowing other</span>
+<span class="c">// credential holders (e.g. J-Quants, ADR-027) to register additional tools</span>
+<span class="c">// on the same /mcp endpoint without xmcp owning their credentials or HTTP</span>
+<span class="c">// logic.</span>
+<span class="k">type</span> ExtraTool <span class="k">struct</span> {
+	Tool    Tool
+	Handler ToolHandler
+}</code></pre>
+<p><code>ExtraTool</code> は「ツール定義(<code>Tool</code>)」と「それを実行する関数(<code>Handler</code>)」の組である。xmcp は追加ツールの<strong>認証情報もHTTP処理も一切知らず</strong>、ただ定義を広告し、呼ばれたらハンドラに丸投げする。この分離により、J-Quants(日本株データ)の3ツールを、xmcp本体に手を入れずに差し込める。ADR-027 が定めた統合である。</p>
+<p>J-Quants 側(<code>jqmcp</code>)は、自分のツールを <code>ExtraTool</code> の並びとして返すだけでよい。</p>
+<pre><code><span class="k">func</span> Tools(tokens *jquants.TokenSource) []xmcp.ExtraTool {
+	<span class="k">return</span> []xmcp.ExtraTool{
+		{
+			Tool: xmcp.Tool{
+				Name:        <span class="s">"jq.get_listed_info"</span>,
+				Description: <span class="s">"Get J-Quants listed company info ... (read-only, structured evidence)."</span>,
+				<span class="c">// ... InputSchema ...</span>
+			},
+			Handler: handleListedInfo(tokens),
+		},
+		<span class="c">// jq.get_daily_quotes, jq.get_statements も同様に続く</span>
+	}
+}</code></pre>
+<p>登録の実際は、Handler 構築時に <code>extras</code> を受け取り、定義とハンドラをそれぞれ蓄える。</p>
+<pre><code>	<span class="k">for</span> _, extra := range extras {
+		h.extraTools = append(h.extraTools, extra.Tool)
+		h.extraHandlers[extra.Tool.Name] = extra.Handler
+	}</code></pre>
+<p><code>tools/list</code> が返す一覧は、組み込みXツールとこれらの extras を単純に連結したものになる(<code>allTools</code>)。<code>tools/call</code> の実行時は、名前が extras にあればそのハンドラを、なければ組み込みXツールの処理を呼ぶ(<code>callTool</code> 冒頭の <code>if handler, ok := h.extraHandlers[name]; ok</code>)。追加ツールは、あたかも最初からそこにあったかのように振る舞う。</p>
+
+<figure>
+<div class="mermaid">
+flowchart TB
+  subgraph builtin["組み込み(xmcp が所有)"]
+    X["x.search_posts_recent&lt;br/&gt;x.get_posts / x.get_users&lt;br/&gt;x.get_users_by_username"]
+  end
+  subgraph extra["ExtraTool(別パッケージが所有)"]
+    J["jq.get_listed_info&lt;br/&gt;jq.get_daily_quotes&lt;br/&gt;jq.get_statements"]
+  end
+  X --&gt; ALL["allTools()&lt;br/&gt;= 組み込み + extras を連結"]
+  J --&gt; ALL
+  ALL --&gt; LIST["tools/list で広告"]
+  ALL --&gt; CALL["tools/call で dispatch&lt;br/&gt;extras は Handler へ丸投げ"]
+</div>
+<figcaption>図5-1 ツールの登録。xmcp は自分のXツールと、他者が差し込む ExtraTool を等しく扱う。認証情報とHTTP処理はそれぞれの所有者に留まる。</figcaption>
+</figure>
+
+<hr>
+
+<h2 id="c6">第6章 認可 — ロールで能力を絞る</h2>
+
+<h3>6.1 静的トークンとセッショントークン</h3>
+<p>第4章で触れた <code>authorizeToken</code> は、単に「通す/通さない」を決めるだけでなく、<strong>誰として</strong>通すのかを返す。二種類のトークンを区別するのがその要点である。</p>
+<pre><code><span class="k">func</span> (h *Handler) authorizeToken(r *http.Request) (ok <span class="k">bool</span>, role <span class="k">string</span>) {
+	<span class="c">// ... "Bearer " 接頭辞を外して token を取り出す ...</span>
+	<span class="k">if</span> subtle.ConstantTimeCompare([]<span class="k">byte</span>(token), []<span class="k">byte</span>(h.sessionToken)) == <span class="n">1</span> {
+		<span class="k">return</span> <span class="k">true</span>, <span class="s">""</span>
+	}
+	<span class="k">if</span> h.store != nil {
+		<span class="k">if</span> resolvedRole, found := h.store.Resolve(token); found {
+			<span class="k">return</span> <span class="k">true</span>, resolvedRole
+		}
+	}
+	<span class="k">return</span> <span class="k">false</span>, <span class="s">""</span>
+}</code></pre>
+<ul>
+<li><strong>静的な管理トークン</strong>(<code>h.sessionToken</code>)に一致すれば、<code>role</code> を空文字列 <code>""</code> として通す。これは「役割の縛りなし、全ツールに全アクセス」の管理者的な経路で、従来からの後方互換の挙動である。比較には <code>subtle.ConstantTimeCompare</code>(定数時間比較)を使い、一致判定にかかる時間から秘密を推測されるタイミング攻撃を防ぐ。</li>
+<li>一致しなければ、<strong>セッションストア</strong>(第7章)にトークンを問い合わせる。見つかれば、そのトークンに<strong>紐付いたロール</strong>を返す。オーケストレータが <code>POST /session/issue</code> で発行した、役割に縛られた短命トークンがこれである。</li>
+<li>どちらでもなければ、認可失敗である。</li>
+</ul>
+<p>以降、<code>role == ""</code> なら管理経路、そうでなければ「ロールに縛られた経路」として扱われる。この分岐が認可の骨格である。</p>
+
+<h3>6.2 tools/list をロールで絞る</h3>
+<p>ロールに縛られたトークンには、そもそも<strong>使えないツールを見せない</strong>。<code>tools/list</code> が返す一覧を、ロールで濾過するのである。</p>
+<pre><code><span class="k">func</span> (h *Handler) toolsForRole(role <span class="k">string</span>) []Tool {
+	all := h.allTools()
+	<span class="k">if</span> role == <span class="s">""</span> {
+		<span class="k">return</span> all <span class="c">// 静的/管理トークン: 全一覧</span>
+	}
+	<span class="k">if</span> h.policyEngine == nil {
+		<span class="k">return</span> nil <span class="c">// fail closed: エンジンが無ければ何も見せない</span>
+	}
+	filtered := make([]Tool, <span class="n">0</span>, len(all))
+	<span class="k">for</span> _, t := range all {
+		<span class="k">if</span> h.policyEngine.Decide(role, t.Name).Decision == <span class="s">"allow"</span> {
+			filtered = append(filtered, t)
+		}
+	}
+	<span class="k">return</span> filtered
+}</code></pre>
+<p><code>policyEngine.Decide(role, ツール名)</code> が「このロールはこのツールを使ってよいか」を決定的に(AIの判断ではなく確定したコードで)判定する。<code>allow</code> のものだけが一覧に残る。ロールに紐付いたトークンでありながら判定エンジンが配線されていなければ、<code>nil</code>(何も見せない)を返す。これも fail-closed の徹底で、「設定漏れは全開放ではなく全閉鎖に倒す」。</p>
+
+<h3>6.3 tools/call を policy.Decide で判定する</h3>
+<p>一覧から隠すだけでは不十分である。クライアントが名前を直接指定して <code>tools/call</code> を呼ぶ可能性があるため、実行時にも同じ判定を行う。<code>handleToolsCall</code> の認可部分を見る。</p>
+<pre><code>	<span class="k">if</span> role != <span class="s">""</span> {
+		<span class="k">if</span> h.policyEngine == nil {
+			h.auditBlock(role, params.Name, <span class="s">"no policy engine for role-bound token"</span>)
+			h.writeJSON(w, http.StatusOK, errorResponse(req.ID, jsonrpcMethodMissing, <span class="s">"tool not permitted for role"</span>))
+			<span class="k">return</span>
+		}
+		decision := h.policyEngine.Decide(role, params.Name)
+		<span class="k">if</span> decision.Decision != <span class="s">"allow"</span> {
+			h.auditBlock(role, params.Name, <span class="s">"tool not permitted for role: "</span>+decision.Reason)
+			h.writeJSON(w, http.StatusOK, errorResponse(req.ID, jsonrpcMethodMissing, <span class="s">"tool not permitted for role"</span>))
+			<span class="k">return</span>
+		}
+		<span class="c">// ... この後、呼び出し上限の確認へ(第7章)...</span>
+	}</code></pre>
+<p>ロール付きトークンの場合、<code>Decide</code> が <code>allow</code> を返さない限り、<code>-32601</code>(method not found)で拒否し、同時に監査ログへ <code>block</code> として記録する。許可されないツールを、あたかも「存在しないメソッド」であるかのように扱う点に注意したい。ロールから見れば、許可されないツールは端から存在しないのと同じなのである。</p>
+<p>なお、この <code>Decide</code> に到達するのは、<strong>この Handler に登録済みだが当該ロールには許可されない</strong>ツール名に限られる(例:<code>ai_it_topic_runner</code> にとっての <code>jq.*</code>)。そもそも一度も登録されていない名前(たとえば <code>x-mcp-readonly</code> が決して持たない <code>x.create_post</code>)は、手前の <code>hasTool</code> 検査で <code>-32602</code> として弾かれ、<code>Decide</code> には届かない。</p>
+
+<figure>
+<div class="mermaid">
+flowchart TB
+  T["tools/call 受信"] --&gt; H{"hasTool(name)?&lt;br/&gt;登録済みのツール?"}
+  H -- いいえ --&gt; E1["error -32602&lt;br/&gt;unknown or unsupported tool"]
+  H -- はい --&gt; R{"role == ''(静的/管理)?"}
+  R -- はい --&gt; RUN["認可・上限を素通しで実行"]
+  R -- いいえ --&gt; D{"policy.Decide(role,name)&lt;br/&gt;== allow?"}
+  D -- いいえ --&gt; E2["error -32601 + block 監査&lt;br/&gt;tool not permitted for role"]
+  D -- はい --&gt; CAP{"呼び出し上限内?(第7章)"}
+  CAP -- いいえ --&gt; E3["error -32602 + block 監査&lt;br/&gt;call cap exceeded"]
+  CAP -- はい --&gt; RUN
+</div>
+<figcaption>図6-1 tools/call の認可フロー。存在確認 → ロール判定 → 上限確認、の三段を通って初めて実行に至る。</figcaption>
+</figure>
+
+<hr>
+
+<h2 id="c7">第7章 コスト上限 — ハードな呼び出しキャップ</h2>
+<p>認可を通過したツールでも、無制限には呼べない。X API や J-Quants API の呼び出しはコストと速度制限を伴うため、ADR-028 は<strong>セッション単位のハードな呼び出し上限</strong>を決定的なバックストップとして置いた。プロンプトでAIに「検索は控えめに」と頼むことも併用するが、それはあくまで補助であり、最後の砦はコードで強制する。第6章末尾に続く上限確認がそれである。</p>
+<pre><code>		<span class="k">if</span> h.store != nil && !h.store.Charge(token) {
+			h.auditBlock(role, params.Name, <span class="s">"call cap exceeded"</span>)
+			h.writeJSON(w, http.StatusOK, errorResponse(req.ID, jsonrpcInvalidParams, <span class="s">"call cap exceeded"</span>))
+			<span class="k">return</span>
+		}</code></pre>
+<p><code>store.Charge(token)</code> は、そのセッショントークンの使用回数を1つ増やし、<strong>上限内なら <code>true</code>、超過なら <code>false</code></strong> を返す。超過すれば <code>-32602</code>(invalid params)で拒否し、<code>block</code> として監査する。上限値は環境変数 <code>AUTH_PROXY_MCP_CALL_CAP</code> で与えられる。</p>
+<p>この上限はセッション(短命トークン1つ)に紐づく。トークン自体がTTL(有効期間、既定35分)で失効するため、「短命かつ回数制限つき」という二重の枠がかかる。仮にAIが暴走的にツールを呼び続けても、あるいはトークンが漏れても、被害はこの二つの枠の内側に閉じる。管理経路(<code>role == ""</code>)はこの上限を素通りする点にも注意したい。上限は「AIに委ねた自己選択の経路」にのみ課される安全弁である。</p>
+
+<figure>
+<div class="mermaid">
+stateDiagram-v2
+  [*] --&gt; 発行済: /session/issue で role 付き token を発行(TTL約35分)
+  発行済 --&gt; 発行済: Charge() 上限内 → true・実行を許可
+  発行済 --&gt; 上限超過: Charge() 上限超過 → false
+  上限超過 --&gt; [*]: error -32602 call cap exceeded + block 監査
+  発行済 --&gt; 失効: TTL 経過
+  失効 --&gt; [*]
+</div>
+<figcaption>図7-1 呼び出し上限とTTL。セッションは回数と時間の二重の枠で囲まれ、超過も失効も安全側に倒れる。</figcaption>
+</figure>
+
+<hr>
+
+<h2 id="c8">第8章 応答の正規化・redaction・秘密の非漏洩</h2>
+
+<h3>8.1 X API 応答の正規化</h3>
+<p>ツールが実際にXのAPIを叩いて得る生の応答は、そのままではAIに渡すのに冗長で扱いにくい。xmcp は必要な項目だけを抜き出し、決まった形に整える<strong>正規化(normalization)</strong>を施す。投稿の正規化 <code>normalizePosts</code> の核心を見る。</p>
+<pre><code>		posts = append(posts, <span class="k">map</span>[<span class="k">string</span>]<span class="k">any</span>{
+			<span class="s">"id"</span>:            postID,
+			<span class="s">"url"</span>:           postURL(postID, username),
+			<span class="s">"author_handle"</span>: username,
+			<span class="s">"created_at"</span>:    createdAt,
+			<span class="s">"text_redacted"</span>: redact(text),
+			<span class="s">"urls"</span>:          extractURLs(entities),
+			<span class="s">"topics"</span>:        []<span class="k">string</span>{},
+			<span class="c">// ... engagement(like/repost/reply/quote), collected_at ...</span>
+		})</code></pre>
+<p>投稿ID、投稿URL、著者ハンドル、作成日時、本文、含まれるリンク、エンゲージメント数(いいね・リポスト等)といった、後段の分析に必要な項目だけを、一定のキー名で並べる。生応答の枝葉は落とされる。フィールド名が <code>text</code> ではなく <strong><code>text_redacted</code></strong> である点に、次に述べる処理の意図が現れている。</p>
+
+<h3>8.2 redaction — 秘密の墨消し</h3>
+<p>Xの投稿本文には、うっかりAPIキーや秘密鍵の類が書かれていることがあり得る。それをそのままAIや下流に流さないよう、<code>redact</code> が既知のパターンを墨消しする。パターンは <code>config/policy.yaml</code> の定義をGoへ移植したものである。</p>
+<pre><code><span class="k">func</span> redact(text <span class="k">string</span>) <span class="k">string</span> {
+	redacted := text
+	<span class="k">for</span> _, p := range defaultRedactionPatterns {
+		redacted = p.regex.ReplaceAllString(redacted, <span class="s">"[REDACTED:"</span>+p.name+<span class="s">"]"</span>)
+	}
+	<span class="k">return</span> redacted
+}</code></pre>
+<p>対象パターンは、<code>api_key=</code> 等の環境変数代入、<code>-----BEGIN ... PRIVATE KEY-----</code>、<code>Bearer</code> トークン、<code>sk-ant-</code> で始まる Anthropic キー、<code>cp_sess_</code> で始まる claude-proxy のセッショントークンである。該当箇所は <code>[REDACTED:名前]</code> に置き換わる。X由来のテキストは「未確認の信号(signal)」であり、こうした墨消しを課す。</p>
+<p>対照的に、J-Quants の応答は<strong>構造化された証拠(evidence)</strong>であり、redaction を課さずそのまま通す(ADR-027)。<code>jqmcp</code> はJSONとして妥当かだけを確認して素通しする。「Xは信号、J-Quantsは証拠」という設計原則が、ツール層のこの差に現れている。</p>
+
+<h3>8.3 エラーに秘密を載せない</h3>
+<p>失敗したときのメッセージにも認証情報を混ぜないよう、上流のエラーは慎重に加工される。X API が失敗した場合、xmcp は応答本文から <code>title</code> や <code>detail</code> といった<strong>説明用のフィールドだけ</strong>を取り出してエラー文言に使う。J-Quants 側はさらに厳格で、ステータスコードしか外に出さない。</p>
+<pre><code>	<span class="k">if</span> resp.StatusCode &gt;= <span class="n">300</span> {
+		<span class="k">return</span> xmcp.NewErrorResult(fmt.Sprintf(<span class="s">"jquants API error (status=%d)"</span>, resp.StatusCode), resp.StatusCode)
+	}</code></pre>
+<p>関数コメントが明言するとおり、「エラーは idToken やリフレッシュトークンを決して含まず、上流のHTTPステータスだけを表に出す」。成功・失敗のいずれの経路でも、秘密がクライアント側やログに漏れない設計になっている。</p>
+
+<figure>
+<div class="mermaid">
+flowchart LR
+  RAW["X API 生応答"] --&gt; NORM["normalizePosts&lt;br/&gt;必要な項目だけ抽出"]
+  NORM --&gt; RED["redact(本文)&lt;br/&gt;既知パターンを墨消し"]
+  RED --&gt; OUT["text_redacted として&lt;br/&gt;クライアントへ"]
+  JRAW["J-Quants 生応答"] --&gt; PROBE["JSON妥当性のみ確認&lt;br/&gt;(evidence: 墨消しなし)"]
+  PROBE --&gt; JOUT["本文をそのまま通す"]
+  ERR["上流エラー"] --&gt; SAFE["status と説明句のみ&lt;br/&gt;認証情報は載せない"]
+</div>
+<figcaption>図8-1 応答の加工。X由来は正規化+墨消し、J-Quantsは妥当性確認のみ、エラーは秘密を除いた最小情報のみ。</figcaption>
+</figure>
+
+<hr>
+
+<h2 id="c9">第9章 Python クライアントからの呼び出し</h2>
+<p>ここまでサーバ側を読んできた。最後に、この <code>/mcp</code> を叩く側 — Python の <code>McpHttpClient</code>(<code>src/shichimimi_agent/mcp/client.py</code>)を見る。クライアントの実装を読むと、第3章で学んだ3メソッドが、そのまま3つのPythonメソッドに対応していることがわかる。まずクライアントの土台である。</p>
+<pre><code><span class="k">@dataclass</span>
+<span class="k">class</span> McpHttpClient:
+    base_url: <span class="k">str</span>
+    timeout_seconds: <span class="k">float</span> = <span class="n">20.0</span>
+    session_token: <span class="k">str</span> | <span class="k">None</span> = <span class="k">None</span>
+
+    <span class="k">def</span> _endpoint(<span class="k">self</span>) -&gt; <span class="k">str</span>:
+        <span class="k">return</span> <span class="s">f"{self.base_url.rstrip('/')}/mcp"</span></code></pre>
+<p>接続先URLは、ベースURLの末尾に <code>/mcp</code> を足すだけである。第4章で見たサーバ側のパスと正確に対応している。要求の送信部分 <code>_post</code> は、セッショントークンがあれば <code>Authorization: Bearer</code> ヘッダとして付ける。</p>
+<pre><code>        headers = {<span class="s">"Content-Type"</span>: <span class="s">"application/json"</span>}
+        <span class="k">if</span> <span class="k">self</span>.session_token:
+            headers[<span class="s">"Authorization"</span>] = <span class="s">f"Bearer {self.session_token}"</span>
+        request = urllib.request.Request(
+            <span class="k">self</span>._endpoint(),
+            data=json.dumps(message).encode(<span class="s">"utf-8"</span>),
+            method=<span class="s">"POST"</span>,
+            headers=headers,
+        )</code></pre>
+<p>これは第4章のBearer認証の、クライアント側の対応物である。サーバの <code>authorizeToken</code> がこのヘッダを読んでロールを解決する。標準ライブラリ(<code>urllib</code>)だけで書かれ、外部依存を持たない点も、Go側と揃った設計思想である。</p>
+<p>そして3つのメソッド呼び出し。握手 <code>initialize</code> は、応答を受けた後に <code>notifications/initialized</code> 通知を送るところまで面倒を見る。</p>
+<pre><code>    <span class="k">def</span> initialize(<span class="k">self</span>) -&gt; <span class="k">dict</span>[<span class="k">str</span>, Any]:
+        response = <span class="k">self</span>._post({<span class="s">"jsonrpc"</span>: <span class="s">"2.0"</span>, <span class="s">"id"</span>: <span class="k">self</span>._next_id(),
+            <span class="s">"method"</span>: <span class="s">"initialize"</span>, <span class="s">"params"</span>: {<span class="s">"protocolVersion"</span>: <span class="s">"2025-03-26"</span>, ...}})
+        <span class="k">if</span> response <span class="k">is</span> <span class="k">None</span> <span class="k">or</span> <span class="s">"error"</span> <span class="k">in</span> response:
+            <span class="k">raise</span> McpClientError(<span class="s">f"initialize failed: {response}"</span>)
+        <span class="k">self</span>._post({<span class="s">"jsonrpc"</span>: <span class="s">"2.0"</span>, <span class="s">"method"</span>: <span class="s">"notifications/initialized"</span>})
+        <span class="k">return</span> response[<span class="s">"result"</span>]</code></pre>
+<p>クライアントの <code>protocolVersion</code>(<code>"2025-03-26"</code>)が、サーバの <code>protocolVersion</code> と一致していることに注目してほしい。握手が成立する前提である。残る2つ、<code>list_tools</code> と <code>call_tool</code> も同じ骨格である。</p>
+<pre><code>    <span class="k">def</span> call_tool(<span class="k">self</span>, name: <span class="k">str</span>, arguments: <span class="k">dict</span>[<span class="k">str</span>, Any]) -&gt; <span class="k">dict</span>[<span class="k">str</span>, Any]:
+        response = <span class="k">self</span>._post({<span class="s">"jsonrpc"</span>: <span class="s">"2.0"</span>, <span class="s">"id"</span>: <span class="k">self</span>._next_id(),
+            <span class="s">"method"</span>: <span class="s">"tools/call"</span>, <span class="s">"params"</span>: {<span class="s">"name"</span>: name, <span class="s">"arguments"</span>: arguments}})
+        <span class="k">if</span> response <span class="k">is</span> <span class="k">None</span> <span class="k">or</span> <span class="s">"error"</span> <span class="k">in</span> response:
+            <span class="k">raise</span> McpClientError(<span class="s">f"tools/call failed: {response}"</span>)
+        <span class="k">return</span> response[<span class="s">"result"</span>]</code></pre>
+<p>要求の <code>params</code> が、サーバ側の <code>toolsCallParams</code>(<code>name</code> と <code>arguments</code>)と正確に噛み合っている。応答に <code>error</code> があれば例外を投げ、無ければ <code>result</code> を返す — これは第2章で見た「result か error のどちらか一方」というJSON-RPCの原則を、クライアント側から確認する形になっている。<code>id</code> は <code>_next_id</code> で1ずつ増やして採番する。</p>
+
+<figure>
+<div class="mermaid">
+sequenceDiagram
+  participant P as McpHttpClient(Python)
+  participant S as /mcp(Go xmcp)
+  participant X as X API
+  P-&gt;&gt;S: initialize(Bearer session token)
+  S--&gt;&gt;P: result → 続けて notifications/initialized 送信
+  P-&gt;&gt;S: list_tools()
+  S--&gt;&gt;P: role で絞ったツール一覧
+  P-&gt;&gt;S: call_tool("x.search_posts_recent", {query})
+  Note over S: authorize → Decide → Charge
+  S-&gt;&gt;X: GET /2/tweets/search/recent(🔑 X_BEARER_TOKEN)
+  X--&gt;&gt;S: 生応答
+  Note over S: 正規化 + redaction
+  S--&gt;&gt;P: result(text_redacted を含む)
+</div>
+<figcaption>図9-1 Python クライアントからサーバ、外部APIまでの一連。クライアントは3メソッドを呼ぶだけで、認可・上限・墨消し・認証注入はすべてサーバ側で完結する。</figcaption>
+</figure>
+
+<hr>
+
+<h2 id="end">むすび</h2>
+<p>本書は、<code>/mcp</code> という一つのエンドポイントを通して、MCP と JSON-RPC 2.0 の全体像を追ってきた。JSON-RPCは <code>method</code>・<code>params</code>・<code>id</code> と、<code>result</code> か <code>error</code> という単純な語彙で会話を組み立て、MCPはその上に <code>initialize</code>・<code>tools/list</code>・<code>tools/call</code> の3メソッドで「握手 → 能力の広告 → 実行」という型を与えていた。Streamable HTTP は、これを <code>POST /mcp</code> という平易なHTTPに乗せるだけの通信路であった。</p>
+<p>そして、その平易な入り口の内側に、7mimi-agent は幾重もの境界を敷いていた。Bearer認証、ロールによる <code>tools/list</code> の濾過と <code>tools/call</code> の <code>policy.Decide</code> 判定、セッション単位のハードな呼び出し上限、応答の正規化と redaction、そして秘密を載せないエラー。これらはいずれも、非決定的なAIの判断ではなく、確定したGoのコードが決めている。</p>
+<p>MCPの本質は、「AIが使える能力をプロトコルとして<strong>宣言</strong>し、その能力を<strong>境界で認可する</strong>」ことにある。AIには「何をしたいか」を自由に選ばせ、「してよいか」「どう外部と繋ぐか」は境界サービスが決める。読み取り専用に限った自己選択サーフェスと、認証情報を分離した書き込み境界の分離が、その自由と安全を両立させていた。<code>/mcp</code> という小さなエンドポイントは、この設計思想が凝縮した、格好の教材だったのである。</p>
+
+</main>
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs";
+  function themeIsDark() {
+    var t = document.documentElement.getAttribute("data-theme");
+    if (t) return t === "dark";
+    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  }
+  mermaid.initialize({ startOnLoad: true, theme: themeIsDark() ? "dark" : "default", securityLevel: "loose" });
+</script>
+</body>
+</html>
