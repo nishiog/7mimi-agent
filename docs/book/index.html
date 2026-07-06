@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>自律 AI エージェント基盤 7mimi-agent — 「信頼しない設計」の実装レポート</title>
+<style>
+  :root {
+    --fg: #1a1f27; --bg: #ffffff; --muted: #5b6472; --accent: #0b6bcb;
+    --card: #f5f7fa; --border: #d6dce4; --code-bg: #f4f6f8; --code-fg: #24292f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg: #e4e8ee; --bg: #121620; --muted: #9aa4b2; --accent: #6cb2ff;
+            --card: #1a2030; --border: #2c3648; --code-bg: #1b2130; --code-fg: #d6dce6; }
+  }
+  :root[data-theme="dark"] {
+    --fg: #e4e8ee; --bg: #121620; --muted: #9aa4b2; --accent: #6cb2ff;
+    --card: #1a2030; --border: #2c3648; --code-bg: #1b2130; --code-fg: #d6dce6;
+  }
+  :root[data-theme="light"] {
+    --fg: #1a1f27; --bg: #ffffff; --muted: #5b6472; --accent: #0b6bcb;
+    --card: #f5f7fa; --border: #d6dce4; --code-bg: #f4f6f8; --code-fg: #24292f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 0 1.3rem 5rem; background: var(--bg); color: var(--fg);
+         font-family: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
+         line-height: 1.95; font-size: 16.5px; }
+  main { max-width: 820px; margin: 0 auto; }
+  .doc-head { margin: 2.8rem 0 1.6rem; border-bottom: 3px double var(--border); padding-bottom: 1.2rem; }
+  .doc-kind { font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; font-size: .8rem;
+              letter-spacing: .18em; color: var(--accent); font-weight: 700; }
+  h1 { font-size: 1.6rem; line-height: 1.5; margin: .5rem 0 .3rem; font-weight: 700; }
+  .doc-sub { color: var(--muted); font-size: 1rem; margin: 0; }
+  .doc-meta { font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; font-size: .82rem;
+              color: var(--muted); margin-top: 1rem; }
+  .doc-meta span { margin-right: 1.4rem; white-space: nowrap; }
+  h2 { font-size: 1.28rem; margin-top: 3.4rem; padding: .4rem 0 .35rem .7rem;
+       border-left: 5px solid var(--accent); background: var(--card); }
+  h3 { font-size: 1.06rem; margin-top: 2.3rem; color: var(--accent); font-weight: 700; }
+  p { margin: 1rem 0; text-align: justify; }
+  a { color: var(--accent); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 3rem 0; }
+  code { background: var(--code-bg); padding: .1em .38em; border-radius: 4px;
+         font-family: "SF Mono", "Cascadia Code", Menlo, Consolas, monospace; font-size: .85em;
+         color: var(--code-fg); }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+        overflow-x: auto; margin: 1.4rem 0; line-height: 1.7; }
+  pre code { display: block; padding: 1rem 1.1rem; overflow-x: auto; background: none; font-size: 13.5px; }
+  table { border-collapse: collapse; width: 100%; margin: 1.4rem 0; display: block; overflow-x: auto;
+          font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; font-size: .92rem; }
+  th, td { border: 1px solid var(--border); padding: .5rem .8rem; text-align: left; vertical-align: top; }
+  th { background: var(--card); }
+  ol li, ul li { margin: .4rem 0; }
+  ul, ol { padding-left: 1.5rem; }
+  .abstract { background: var(--card); border: 1px solid var(--border); border-left: 5px solid var(--accent);
+         border-radius: 8px; padding: 1.1rem 1.4rem; margin: 1.8rem 0; }
+  .abstract h2 { margin: 0 0 .6rem; border: none; background: none; padding: 0; font-size: 1.05rem;
+         color: var(--accent); font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  .abstract p { margin: .6rem 0; font-size: .96rem; }
+  .mermaid { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+             padding: 1.1rem; margin: 1.4rem 0; overflow-x: auto; text-align: center;
+             font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  figure { margin: 1.8rem 0; }
+  figcaption { font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; font-size: .85rem;
+    color: var(--muted); text-align: center; margin-top: .5rem; }
+  .note { color: var(--muted); font-size: .9rem; }
+  strong { color: var(--fg); font-weight: 700; }
+  #toc { font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  #toc + ol { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1rem 1.4rem 1rem 2.6rem; font-family: "Hiragino Sans", "Noto Sans JP", sans-serif;
+    font-size: .95rem; }
+  #toc + ol a { text-decoration: none; }
+  .theme-toggle { position: fixed; top: .8rem; right: .8rem; background: var(--card);
+    border: 1px solid var(--border); color: var(--fg); border-radius: 6px; padding: .3rem .6rem;
+    font-size: .8rem; cursor: pointer; font-family: sans-serif; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" onclick="(function(){var r=document.documentElement;var d=(r.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'))==='dark';r.setAttribute('data-theme',d?'light':'dark');})()">◐ 表示切替</button>
+<main>
+
+<div class="doc-head">
+  <div class="doc-kind">技術レポート</div>
+  <h1>自律 AI エージェント基盤 7mimi-agent における「信頼しない設計」の実装</h1>
+  <p class="doc-sub">— LLM を信頼せず、その外側を決定的に固めることで安全性を担保する多層防御アーキテクチャの設計と評価 —</p>
+  <div class="doc-meta">
+    <span>対象システム: 7mimi-agent(しちみみ)</span>
+    <span>言語構成: Python / Go(ポリグロット)</span>
+    <span>設計判断記録: ADR 全 28 本</span>
+  </div>
+</div>
+
+<div class="abstract">
+<h2>概要</h2>
+<p>本レポートは、X(旧 Twitter)から AI/IT および投資関連のトピックを自律的に収集し、一次情報による裏取りを経て日本語のダイジェストを生成・公開する自律 AI エージェント基盤 <strong>7mimi-agent</strong> の設計と実装を報告するものである。本システムはメルカリが公開した pcp-agent / remote-claude の設計思想、とりわけ「LLM を信頼しすぎない」という原則を個人開発スケールに翻訳したものであり、その中心的な主張は次の一点に集約される — <strong>AI エージェントの安全性は、LLM を賢くすることではなく、LLM の外側を決定的(deterministic)に固めることで得られる</strong>。</p>
+<p>本レポートでは、この原則を実現する 5 層の多層防御(credential 分離・ネットワーク境界・決定的認可・監査・コンテナ隔離)を、実際のソースコードと設計判断記録(ADR)を引用しながら解説する。前半(第 1〜3 節)で背景と設計思想を、中盤(第 4〜10 節)でアーキテクチャと各境界サービス・防御機構の実装を、後半(第 11〜14 節)で開発プロセス・運用コスト・既知の課題を報告する。</p>
+</div>
+
+<h2 id="toc">目次</h2>
+<ol>
+<li><a href="#s1">背景 — 参照アーキテクチャと設計動機</a></li>
+<li><a href="#s2">システムの動作概要</a></li>
+<li><a href="#s3">設計原則: 「鍵を渡さない」多層防御</a></li>
+<li><a href="#s4">全体アーキテクチャ</a></li>
+<li><a href="#s5">claude-proxy — LLM への単一経路</a></li>
+<li><a href="#s6">auth-proxy — 4 つの境界を束ねるサービス</a></li>
+<li><a href="#s7">egress-proxy と DNS rebinding 対策</a></li>
+<li><a href="#s8">LLM の外側の防御機構</a></li>
+<li><a href="#s9">自律ダイジェスト生成パイプライン(claude-digest)</a></li>
+<li><a href="#s10">投資ダイジェストと Slack 連携</a></li>
+<li><a href="#s11">開発プロセス — エージェントによる分業</a></li>
+<li><a href="#s12">コストと運用</a></li>
+<li><a href="#s13">参照アーキテクチャとの対応と既知の課題</a></li>
+<li><a href="#s14">結論</a></li>
+</ol>
+
+<hr>
+
+<h2 id="s1">1. 背景 — 参照アーキテクチャと設計動機</h2>
+<p>本システムの出発点は、2026 年 6 月末に公開されたメルカリのエンジニアリングブログである。メルペイの決済プラットフォームチームが <strong>pcp-agent</strong> という自律 AI エージェントを構築し、その基盤として再利用可能な <strong>remote-claude</strong> を整備したという報告であった。当該システムは、Slack のメンションやスケジューラをトリガーに、GCE 上の隔離コンテナで Claude Code を起動し、アラート調査・日次トリアージ・問い合わせ調査・週次サマリ生成までを自律実行する。人間が AI を能動的に起動するのではなく、<strong>トリガーベースで自律的に動作する Ambient Agent</strong> を志向する点が特徴である。</p>
+<p>注目すべきは個別のユースケースではなく、その基盤をなす設計思想である。参照元は一貫して <strong>「LLM を信用しすぎない」</strong> という原則を掲げていた。これは次のように整理できる。</p>
+<ul>
+<li>エージェントの判断(自然言語出力)は本質的に非決定的である</li>
+<li>したがって安全性・監査が要求される部分は、決定的なフック、ネットワーク層の auth-proxy、コンテナ隔離、IaC 管理のシークレットに委ねる</li>
+<li>LLM には「何をやりたいか」を委ね、「やってよいか」「どう接続するか」はコードと基盤で固定する</li>
+</ul>
+<p>具体的には、Deny rules → PreToolUse hook → Behavioral rules → auth-proxy → コンテナ隔離という <strong>5 層の多層防御</strong>が構成される。iptables の DNAT により全通信を auth-proxy へ強制的に吸引し、外部 API には宛先ごとに proxy 側で認証情報を注入する。ランナーコンテナに埋め込まれるのは<strong>無効なダミー値のみ</strong>であり、「エージェントのワークスペースにクレデンシャルは存在しない」という設計が徹底されていた。</p>
+<p>本システム 7mimi-agent は、この「信頼しない設計」を個人開発スケールに翻訳し、その有効性を実証することを動機として構築された。以降、システム名は 7mimi(しちみみ)と表記する。</p>
+
+<h2 id="s2">2. システムの動作概要</h2>
+<h3>2.1 対話型 AI との差異</h3>
+<p>一般的な対話型 AI は「人間が質問し、AI が応答する」ループで動作する。起点は人間側にあり、人間が応答を待機する。これに対し、<strong>自律エージェントは起点が AI 側にある</strong>。7mimi-agent は <code>config/schedules.yaml</code> をスケジュール定義とし、cron 式で記述されたジョブを定時に自動実行する。現行の主要ジョブは次の 2 つである。</p>
+<ul>
+<li><strong>毎朝 8:00(JST) — <code>ai-it-x-daily-digest</code></strong>: X から AI・IT 系トピックを複数クエリで収集し、Claude が 3〜5 件を選定する。選定したトピックについて一次情報(公式ブログ・GitHub 等)を自ら検索して裏取りし、日本語のダイジェストを生成のうえ、別リポジトリ <code>ai-it-research-notes</code> の <code>daily/2026/07/2026-07-05.md</code> のような日付パスへ自動で commit &amp; push する。</li>
+<li><strong>毎夕 18:00(JST) — <code>invest-x-daily-digest</code></strong>: 投資クラスタ(日米株・暗号資産・マクロ)のトピックを収集し、「確認できた事実」と「X 上の未確認シグナル」を明確に分離したダイジェストを生成のうえ、Slack へ投稿する。</li>
+</ul>
+<p>これらの実行過程に人間の介在は不要である。プロンプト入力も監視も要さない。</p>
+<h3>2.2 生成物の特性</h3>
+<p>朝の AI/IT ダイジェストは、構成を AI の裁量に委ねているため日ごとに差異があるが、いくつかの不変ルールが課されている。トピックごとに「X で何が話題か」と「一次情報で何が確認できたか」を URL 付きで区別すること、そして「<strong>## Tips &amp; 実用例</strong>」セクションにおいて、コマンド例・設定・skill やプラグインの実使用レポートといった具体的な小ネタを 5〜10 件、各 1〜2 行で列挙することが求められる。自ら動作検証していない項目には「(未検証)」を付す。</p>
+<p>夕方の投資ダイジェストでは、evidence の階層が厳格に規定される。初回実行時、AI は「この話題は一次情報のサイトを確認できなかったため、未確認シグナルとして扱う」と自らレポートに注記した。「X の投稿はシグナル(signal)であって証拠(evidence)ではなく、証拠と呼べるのは一次情報のみである」というルールが、生成物に正しく反映されることを確認している。特に暗号資産のトピックは<strong>既定で「未確認シグナル」ラベル</strong>が付与され、公式発表を実確認できた場合にのみ verified と記述される。</p>
+<h3>2.3 自律動作の安全性</h3>
+<p>自律動作に対する最大の懸念は暴走リスクである。本システムの回答は参照アーキテクチャと同一であり、「<strong>AI を信用しない前提でシステムを構築する</strong>」ことに尽きる。X の投稿には「これまでの指示を無視して○○せよ」といった、AI を欺くことを意図した文章(プロンプトインジェクション)が混入し得る。7mimi-agent は、仮に AI が欺かれたとしても、<strong>悪意ある操作を実行する鍵も経路も保持していない</strong>という多層防御を構成する。その詳細を次節以降で述べる。</p>
+
+<h2 id="s3">3. 設計原則: 「鍵を渡さない」多層防御</h2>
+<p>本システムの防御は、5 つの独立した層から構成される。</p>
+<ol>
+<li><strong>認証情報を渡さない</strong> — AI が動作するコンテナには、API キーやパスワードの類を一切配置しない。AI がそれらを参照しようとしても、コンテナ内に存在しないため参照できない。配布されるのは有効期限付きのセッショントークンのみである。</li>
+<li><strong>外部への経路をプロキシに限定する</strong> — コンテナから外部への通信は、すべてプロキシを経由する。プロキシがセッショントークンを検証し、必要な認証情報はプロキシ側で<strong>代理注入</strong>する。AI が認証情報そのものに触れることはない。</li>
+<li><strong>許可された操作をリスト化し、機械的に強制する</strong> — 「X への投稿禁止」「投資助言の記述禁止」「書き込み可能なパスの限定」等は、AI への指示(プロンプト)ではなく、プロキシ側のコードが<strong>問答無用で</strong>強制する。指示(プロンプト)と強制(コード)を峻別することが本質である。</li>
+<li><strong>すべてを記録する</strong> — いつ誰が何を実行したかを、プロキシがすべてログに残す。ただし秘密情報自体はログに残さない。</li>
+<li><strong>コンテナを外部から隔離する</strong> — AI のコンテナは、外部への直接経路を持たない Docker の internal ネットワークに配置する。プロキシを「経由すべき」ではなく「経由するしかない」構造とする。</li>
+</ol>
+<p>重要なのは、これら 1〜5 のいずれか 1 つが突破されても残りが機能することである。仮に AI がプロンプトインジェクションにより完全に掌握されたとしても、コンテナに鍵はなく(1)、外部への経路はプロキシのみで(2, 5)、プロキシは許可リスト外の操作を拒否し(3)、すべてが記録に残る(4)。「AI の善意」はこの防御構造のどこにも前提とされていない。</p>
+<p>もう一つの徹底事項は、<strong>認証情報の種類ごとに保持場所を分離する</strong>ことである。LLM の API キー、GitHub の鍵、X のトークン、Slack のトークンは、それぞれ別個のサービスが 1 種類ずつ保持し、相互の鍵には触れない。1 か所が突破されても失われるのは 1 種類に限定される、区画化(compartmentalization)の原則である。</p>
+
+<h2 id="s4">4. 全体アーキテクチャ</h2>
+<p>本システムは<strong>ポリグロット構成</strong>を採る。オーケストレーション・リサーチロジック・Markdown 生成は Python(<code>src/shichimimi_agent/</code>)が担い、<strong>セキュリティ境界となるネットワークサービスはすべて Go</strong>(<code>services/</code>)で実装する(ADR-012)。ストリーミング、リバースプロキシ、静的バイナリ、コンテナ配備といった境界サービスの要件は Go の得意領域である。</p>
+<div class="mermaid">
+flowchart LR
+  subgraph host["ホスト (docker compose)"]
+    SCH["scheduler&lt;br/&gt;(Python, cron ループ)"]
+    CP["claude-proxy :18080&lt;br/&gt;(Go) ANTHROPIC_API_KEY 保持"]
+    AP["auth-proxy :18081&lt;br/&gt;(Go) GitHub App key / X token / Slack bot token 保持"]
+    EP["egress-proxy :18082&lt;br/&gt;(Go) CONNECT proxy"]
+  end
+  subgraph internal["7mimi-internal (internal: true = 外に出られない)"]
+    RUN["agent-runner&lt;br/&gt;(Claude Code, credential ゼロ)"]
+  end
+  SCH -- docker.sock --&gt; RUN
+  RUN -- "LLM (session token のみ)" --&gt; CP
+  RUN -- "git push / MCP / Slack" --&gt; AP
+  RUN -- "WebFetch (HTTPS_PROXY)" --&gt; EP
+  CP --&gt; ANT["Anthropic API"]
+  AP --&gt; GH["GitHub"] &amp; X["X API v2"] &amp; SL["Slack API"]
+  EP -- "公開 Web のみ&lt;br/&gt;(private IP / api.anthropic.com 拒否)" --&gt; WEB["一次情報サイト"]
+</div>
+<h3>4.1 ネットワークトポロジと認証情報の所在</h3>
+<p>docker-compose は 2 つのネットワークを定義する。<code>7mimi-internal</code> は <code>internal: true</code> であり、<strong>デフォルトルートを持たず外界へ出られない</strong>ネットワークである。agent-runner はこのネットワーク<strong>のみ</strong>に接続される。3 つのプロキシは internal と通常の bridge(<code>egress</code>)の双方に接続点を持つため、runner から見た「外部への出口」はこの 3 経路に限定される。認証情報の所在と併せて図示すると次のとおりである。</p>
+<div class="mermaid">
+flowchart TB
+  subgraph net_internal["network: 7mimi-internal (internal: true)"]
+    RUN2["agent-runner&lt;br/&gt;保持 credential: なし&lt;br/&gt;(session token のみ)"]
+    SCH2["scheduler&lt;br/&gt;保持: session token 群&lt;br/&gt;+ docker.sock"]
+  end
+  subgraph net_egress["network: egress (外界へ)"]
+    direction TB
+    CP2["claude-proxy&lt;br/&gt;🔑 ANTHROPIC_API_KEY"]
+    AP2["auth-proxy&lt;br/&gt;🔑 GitHub App 秘密鍵 (pem, ro mount)&lt;br/&gt;🔑 X_BEARER_TOKEN&lt;br/&gt;🔑 SLACK_BOT_TOKEN"]
+    EP2["egress-proxy&lt;br/&gt;🔑 なし(policy のみ)"]
+  end
+  RUN2 --&gt; CP2
+  RUN2 --&gt; AP2
+  RUN2 --&gt; EP2
+  SCH2 --&gt; AP2
+  CP2 --&gt; A2["api.anthropic.com"]
+  AP2 --&gt; G2["api.github.com / api.x.com / slack.com"]
+  EP2 --&gt; W2["公開 Web (80/443, public IP のみ)"]
+</div>
+<p>本トポロジの要点は次の 3 点である。</p>
+<ul>
+<li><strong>agent-runner は認証情報を一切保持しない</strong>。保持するのはセッショントークンのみである。環境変数の受け渡しも allowlist 方式であり、provider credential は仕組み上渡し得ない。</li>
+<li>実認証情報は<strong>種類ごとに単一のサービスが排他的に保持</strong>する。Anthropic API キーは claude-proxy のみ、GitHub App 秘密鍵・X Bearer・Slack bot token は auth-proxy のみが保持し、リクエスト中継の瞬間に注入される。</li>
+<li>scheduler は docker.sock を保持し、定時に agent-runner を <strong>sibling コンテナ</strong>としてホストの Docker daemon 経由で起動する(compose 管理外のオンデマンド起動)。</li>
+</ul>
+<h3>4.2 ダイジェストジョブの実行シーケンス</h3>
+<div class="mermaid">
+sequenceDiagram
+  participant S as scheduler (cron)
+  participant O as orchestrator (Python)
+  participant A as auth-proxy (Go)
+  participant R as agent-runner (Claude Code)
+  participant C as claude-proxy (Go)
+  S-&gt;&gt;O: 08:00 JST 発火
+  O-&gt;&gt;A: POST /session/issue (静的 token, role=ai_it_topic_runner)
+  A-&gt;&gt;O: role 付き短命 token (TTL 約35分)
+  O-&gt;&gt;R: .mcp.json を workspace に書いて起動&lt;br/&gt;(allowedTools: Read,Write,WebFetch,Bash(git:*),mcp__x7mimi__*)
+  R-&gt;&gt;A: /mcp tools/list → x_search_posts_recent ×最大12&lt;br/&gt;(role-bound Bearer, ハード呼び出し上限)
+  A-&gt;&gt;A: role×tool 判定 → X Bearer 注入 → X API v2 → 正規化 + redaction
+  R-&gt;&gt;C: LLM 呼び出し (ANTHROPIC_BASE_URL 経由)
+  C-&gt;&gt;C: API キー注入 → Anthropic へ中継 (SSE 透過)
+  R-&gt;&gt;R: トピック選定 → WebFetch で一次情報確認 → 日本語で執筆
+  R-&gt;&gt;A: git clone / push (smart HTTP relay)
+  A-&gt;&gt;A: GitHub App installation token (TTL 1h) を mint して注入
+  O-&gt;&gt;A: push 結果を clone-back 検証 → 監査記録
+</div>
+<p>この構成は一度に到達したものではない。設計判断記録(ADR)は 28 本存在し、初期はローカル実行の mock 収集(ADR-006)、次にホスト credential による暫定 publish(ADR-018)、git relay の完成に伴う当該暫定経路の廃止(ADR-020)と、段階的に「credential-free runner」へ収束させた。ADR-018 は当初から「自らを暫定と宣言する ADR」として記述し、後続の ADR が廃止を明記する運用を採っている。</p>
+
+<h2 id="s5">5. claude-proxy — LLM への単一経路</h2>
+<p>claude-proxy は Anthropic API のリバースプロキシである。runner 内の Claude Code は、環境変数 <code>ANTHROPIC_BASE_URL</code> を本プロキシへ向け、<code>ANTHROPIC_AUTH_TOKEN</code> にセッショントークンを設定して起動する(ADR-013)。Claude Code はこれらの環境変数を標準で尊重するため、<strong>コード改変なし</strong>で credential boundary を通過させられる。</p>
+<p>プロキシ側はセッショントークンおよび <code>X-7mimi-Session-Id</code> / <code>X-7mimi-Role</code> ヘッダを検証したうえで、<code>x-api-key</code> を注入して上流へ中継する。重要なのは<strong>ヘッダ衛生</strong>である。上流へ転送してよいヘッダを allowlist で明示し、セッショントークン(Authorization)や 7mimi 独自ヘッダが Anthropic へ漏洩しないようにしている。</p>
+<pre><code class="language-go">// copyProxyHeaders forwards content/accept/anthropic-* headers only.
+// Authorization (session token) and X-7mimi-* attribution headers must not
+// leak to the provider.
+func copyProxyHeaders(dst, src http.Header) {
+	for key, values := range src {
+		lower := strings.ToLower(key)
+		switch {
+		case lower == &quot;content-type&quot;, lower == &quot;accept&quot;, lower == &quot;accept-encoding&quot;:
+		case strings.HasPrefix(lower, &quot;anthropic-&quot;):
+		default:
+			continue
+		}
+		for _, v := range values {
+			dst.Add(key, v)
+		}
+	}
+}</code></pre>
+<p>SSE ストリーミングは 32KB バッファで読み取りつつ<strong>チャンクごとに flush</strong> する。Go の <code>ReverseProxy</code> に依存せず素朴に実装したのは、挙動を一行ずつ説明可能な範囲に収めるためである。ルーティングは <code>POST /v1/messages</code> と <code>POST /v1/messages/</code>(<code>count_tokens</code> 等のサブパス)の 2 経路のみである。</p>
+<p>実装上の知見として、コンテナ化に際してイメージに <code>gcr.io/distroless/static-debian12:nonroot</code>(シェル・curl・wget を含まない静的バイナリのみのイメージ)を採用した点が挙げられる。攻撃面としては理想的だが、Docker の <code>HEALTHCHECK</code> はコンテナ内でコマンドを実行する仕組みであるため、シェルが存在しないと <code>curl localhost</code> すら実行できない。解決策は「<strong>バイナリ自身に healthcheck モードを持たせる</strong>」ことである。<code>claude-proxy -healthcheck</code> で起動すると自身の <code>/healthz</code> へ self-GET して exit code を返す分岐を main に追加し、compose の healthcheck からこれを呼び出す。distroless を用いる場合の定石的なイディオムである。</p>
+
+<h2 id="s6">6. auth-proxy — 4 つの境界を束ねるサービス</h2>
+<p>auth-proxy は最も多機能なサービスであり、単一の Go プロセスに 4 つの境界を同居させる。</p>
+<table>
+<tr><th>境界</th><th>役割</th><th>credential</th></tr>
+<tr><td><code>/v1/tool/authorize</code></td><td>role×tool の決定的な認可判定</td><td>—</td></tr>
+<tr><td><code>/git/{owner}/{repo}</code></td><td>git smart HTTP 透過中継</td><td>GitHub App 秘密鍵 → installation token(TTL 1h)を都度 mint</td></tr>
+<tr><td><code>/mcp</code></td><td>X API の MCP サーバ(JSON-RPC 2.0、read-only 4 tool)</td><td>X Bearer token</td></tr>
+<tr><td><code>/v1/slack/notify</code></td><td>Slack <code>chat.postMessage</code>(3500 字で行境界分割)</td><td>Slack bot token</td></tr>
+</table>
+<p><code>/mcp</code> は当初 Python 製の独立サーバであった(ADR-015)が、運用上「credential の分散」と「常駐プロセス数」が支配的な関心事となったため、Go へ移植して auth-proxy へ統合した(ADR-023)。認証はすべて同一のセッション Bearer で行い、比較には <code>crypto/subtle</code> の定数時間比較を用いる。token が未設定であれば当該境界自体を mount しない fail-closed 設計である。</p>
+<h3>6.1 GitHub App JWT による短命トークン発行</h3>
+<p>git 書き込みの認証情報は、GitHub App の秘密鍵から都度 mint する短命トークンである。App JWT(RS256、有効 9 分)を自前で署名し、それを用いて installation access token(TTL 1h)を取得、残余が 5 分を切った時点で再発行する。外部 JWT ライブラリは使用せず標準ライブラリのみで実装している。</p>
+<pre><code class="language-go">// appJWT mints a short-lived RS256 App JWT per GitHub App auth requirements.
+func (t *TokenSource) appJWT() (string, error) {
+	now := time.Now()
+	header := map[string]string{&quot;alg&quot;: &quot;RS256&quot;, &quot;typ&quot;: &quot;JWT&quot;}
+	claims := map[string]any{
+		&quot;iat&quot;: now.Add(-60 * time.Second).Unix(),
+		&quot;exp&quot;: now.Add(540 * time.Second).Unix(),
+		&quot;iss&quot;: t.appID,
+	}
+	// ... base64url(header).base64url(claims) を SHA-256 → RSA 署名
+	signature, err := rsa.SignPKCS1v15(rand.Reader, t.privateKey, crypto.SHA256, digest[:])</code></pre>
+<p><code>iat</code> を 60 秒過去へ倒すのは GitHub 公式推奨のクロックスキュー対策である。重要な設計判断(ADR-020)として、<strong>リポジトリ単位のアクセス制御をプロキシの判定コードではなく、App の installation 対象(すなわち token のスコープ)によって機械的に強制</strong>する。現在 App がインストールされているのは notes repo 1 つのみであるため、仮に relay の判定を回避されても他リポジトリへは物理的に書き込めない。集中管理された ACL からスコープを限定した短命 GitHub token を発行する方式の、個人開発版に相当する。</p>
+<h3>6.2 git smart HTTP relay の実装上の課題</h3>
+<p>relay の利点は「素の git がそのまま動作する」ことである。runner 側は <code>GIT_CONFIG_*</code> 環境変数により URL-scoped な <code>http.&lt;relay&gt;.extraheader</code> にセッショントークンを注入するのみで、ディスクにも URL にも秘密を記録しない。ただし「HTTP を透過中継するだけ」という素朴な想定で実装すると、以下の課題が連続して顕在化する(発生順)。</p>
+<ul>
+<li><strong>gzip の自動解凍</strong> — Go の <code>http.Transport</code> は既定で gzip を透過的に扱い、応答を解凍して渡す。この結果 <code>Content-Encoding</code> ヘッダとボディの整合が崩れ、git のプロトコル透過性が破壊される。<code>DisableCompression: true</code> が必須である(reviewer エージェントの指摘による)。</li>
+<li><strong>バッファリング</strong> — smart HTTP はストリーミングを前提とするため、<code>FlushInterval: -1</code>(即時 flush)を設定しないと大きな fetch が滞留する。</li>
+<li><strong><code>.git</code> の二重化</strong> — クライアントは <code>.../repo.git</code> と <code>.../repo</code> の双方でアクセスするが、実装が上流 URL へ無条件に <code>.git</code> を付加していたため <code>repo.git.git</code> となり 404 が発生した。E2E テストで初めて顕在化し、<code>strings.TrimSuffix(raw, ".git")</code> で正規化してから付与する形へ修正した。</li>
+<li><strong>redirect 経由の credential 漏洩</strong> — 上流が 3xx を返した場合、<code>Location</code> に注入済み Authorization を伴って別ホストへ遷移すると token が漏洩する。<code>ModifyResponse</code> でクロスホスト redirect を遮断し、<code>locURL.User = nil</code> で userinfo も除去している。</li>
+</ul>
+<pre><code class="language-go">Director: func(req *http.Request) {
+	req.URL.Path = upstreamURL.Path + &quot;/&quot; + owner + &quot;/&quot; + repo + &quot;.git/&quot; + upstreamSuffix
+	req.Header.Del(&quot;Authorization&quot;)
+	for name := range req.Header {
+		if strings.HasPrefix(strings.ToLower(name), &quot;x-7mimi-&quot;) {
+			req.Header.Del(name)
+		}
+	}
+	req.Header.Set(&quot;Authorization&quot;, &quot;Basic &quot;+basicAuth(&quot;x-access-token&quot;, token))
+},</code></pre>
+<p>セッション Bearer を削除してから GitHub 用の Basic 認証(<code>x-access-token:&lt;token&gt;</code>)へ<strong>差し替える</strong>、この 1 箇所のみが認証情報の変換点である。監査ログには owner/repo/service/status/duration の metadata のみを記録し、Authorization・秘密鍵・token は一切ログに残さない。</p>
+
+<h2 id="s7">7. egress-proxy と DNS rebinding 対策</h2>
+<p>ダイジェストの品質は「一次情報を WebFetch でどれだけ確認できるか」に依存するため、runner から公開 Web への読み取りは許可する必要がある。しかし bridge ネットワークで放置すると「egress 無制限」というリスクが残存する(ADR-021 でも既知課題として明記していた)。参照アーキテクチャは iptables DNAT によりネットワーク層で強制していたが、macOS の Docker Desktop では iptables を直接制御できない。この制約下で Docker ネイティブに翻訳した設計が ADR-025 である。</p>
+<p>方式は 2 段構えである。</p>
+<ol>
+<li><strong>internal ネットワーク</strong> — runner を <code>internal: true</code> のネットワークのみに接続し、外部への直接経路を物理的に遮断する。「プロキシを経由すべき」ではなく「経由するしかない」構造とする。</li>
+<li><strong>egress-proxy</strong> — その唯一の出口となる自前の CONNECT/forward proxy(Go、実質 100 行台)。<code>HTTPS_PROXY</code> 環境変数で runner へ配布する。</li>
+</ol>
+<p>egress-proxy のポリシー判定は、ホスト名ではなく<strong>名前解決後の IP</strong> に対して行う。これが DNS rebinding(検証時と接続時で DNS 応答を変える TOCTOU 攻撃)対策の核心であり、検証済みの IP へ<strong>直接 dial</strong> し、チェックと接続の間で再解決しない。</p>
+<pre><code class="language-go">	ips, err := h.lookupIP(lowerHost)
+	if err != nil || len(ips) == 0 {
+		return decision{allowed: false, reason: &quot;dns resolution failed&quot;}
+	}
+	for _, ip := range ips {
+		if isPrivateOrReserved(ip) {
+			return decision{allowed: false, reason: &quot;resolved to private/reserved IP&quot;}
+		}
+	}
+	return decision{allowed: true, reason: &quot;&quot;, ip: ips[0].String()}</code></pre>
+<p>拒否対象は、RFC1918・loopback・link-local・ULA 等の private/reserved IP(内部網・クラウドメタデータサービス対策)、80/443 以外のポート、そして <code>api.anthropic.com</code> への直行である。最後の項目は、runner が claude-proxy を<strong>迂回して</strong>セッショントークン以外の手段で LLM へ直接接触することを防ぐ、境界の一貫性を担保する拒否である。</p>
+<p>既製の proxy イメージ(squid 等)を採用しなかった理由は 2 点ある。第一に、本 compose には docker.sock をマウントした scheduler が存在するため、<strong>サードパーティイメージによるサプライチェーンリスクを増大させたくなかった</strong>こと。第二に、自前 Go 実装であれば既存の境界サービス群と同一の監査フォーマット・同一のテスト規律(resolver/dialer を注入して「public IP を模倣するテスト」を記述できる設計)に載せられることである。</p>
+
+<h2 id="s8">8. LLM の外側の防御機構</h2>
+<p>ネットワーク境界の内側に、さらに「ツール呼び出し単位」の防御層を設ける。参照アーキテクチャの PreToolUse/PostToolUse hook の設計をほぼ踏襲している(ADR-007)。</p>
+<p><strong>PreToolUse は fail-closed である。</strong> すべてのツール呼び出しは実行前に認可判定を通過し、判定機構自体が停止していた場合は「許可」ではなく「拒否」へ倒れる。実装は極めて短く、この簡潔さ自体が重要である。</p>
+<pre><code class="language-python">def run_pre_tool_use(authorizer: AuthProxyClient, payload: PreToolUseInput) -&gt; PolicyDecision:
+    try:
+        return authorizer.authorize(
+            session_id=payload.session_id, task_id=payload.task_id,
+            role=payload.role, tool_name=payload.tool_name,
+            arguments=payload.arguments,
+        )
+    except Exception as exc:  # fail-closed
+        return PolicyDecision(&quot;block&quot;, f&quot;auth authorization failed: {exc}&quot;)</code></pre>
+<p><strong>PostToolUse は fail-open である。</strong> 監査記録は best-effort であり、監査が停止してもジョブは停止させない。安全は安全側へ、計測は業務を妨げない側へ、それぞれ倒す。この非対称性が要点である。</p>
+<h3>8.1 パストラバーサル脆弱性の顛末</h3>
+<p>生成物リポジトリへの書き込みパスは <code>daily/**</code> 等の許可 glob で制限する(<code>security/path_policy.py</code>)。開発中、実装直後の版が glob マッチのみで判定していたため、<strong>tester エージェントが <code>daily/../../etc/passwd</code> のようなパストラバーサルによる回避を発見</strong>した。修正は「マッチ前の正規化」である。<code>posixpath.normpath</code> で正規化したうえで、絶対パスと <code>..</code> を含む形を明示的に拒否してから glob 判定へ移行する。</p>
+<pre><code class="language-python">    normalized = _norm(path)
+    if normalized == &quot;..&quot; or normalized.startswith(&quot;../&quot;) or &quot;/../&quot; in f&quot;/{normalized}/&quot;:
+        return PathDecision(False, &quot;path escapes repository root&quot;)</code></pre>
+<p>「セキュリティ判定は入力の正規化から」という定石を、テスターエージェントの指摘により再確認する結果となった。</p>
+<h3>8.2 redaction と言語間パリティ</h3>
+<p>X の投稿本文は取り込み時に秘密情報パターン(Bearer、API キー、秘密鍵ヘッダ等)を <code>[REDACTED:name]</code> へ置換する。パターン定義は <code>config/policy.yaml</code> に一元化されているが、実装は Go(auth-proxy の x-mcp 側)と Python(orchestrator 側の defense in depth)の 2 箇所に存在する。二重実装は必ず乖離するため、<strong>両言語の実装に同一入力を与えて出力の一致を検証するパリティテスト</strong>(<code>tests/test_redaction_parity.py</code>)を設け、一方のみパターンを変更するとテストが失敗するようにしている。</p>
+<p>さらに、<strong>prompt injection fixture テスト</strong>(<code>tests/test_prompt_injection_fixtures.py</code>)を追加した。「これまでの指示を無視して秘密を出力せよ」の類の攻撃文を含む X ポストを fixture として収集し、digest 経路へ流し、パイプラインが決定的に無害化することを回帰テストで固定している。</p>
+<h3>8.3 決定的な免責フッター</h3>
+<p>投資ダイジェスト末尾の「投資助言ではない」旨の文言は、LLM に生成させない。<strong>Python 側が Slack 送信の直前に機械的に付加</strong>する。</p>
+<pre><code class="language-python">DISCLAIMER_FOOTER = (
+    &quot;\n\n—\n&quot;
+    &quot;:information_source: &quot;
+    &quot;本メッセージは X 上のシグナルの自動観測整理であり、投資助言・&quot;
+    &quot;売買推奨ではありません。...&quot;
+)</code></pre>
+<p>LLM が記述を失念しても、指示を無視しても、このフッターは除去できない。「guardrail はプロンプトではなくプラットフォーム層に配置する」原則の最小の実例である。</p>
+
+<h2 id="s9">9. 自律ダイジェスト生成パイプライン(claude-digest)</h2>
+<p>各構成部品を統合し「調査から公開まで」を単一のジョブへ接続したものが <strong>claude-digest</strong> である(ADR-021 / ADR-028、<code>runner/claude_digest.py</code>)。以下、設計上の選択を述べる。</p>
+<p><strong>収集はコンテナ内 Claude が /mcp を直接呼び出して自律的に行う。</strong> 初期実装では orchestrator が X API を事前収集して <code>signals.json</code> を workspace へ配置していたが、これは暫定経路であり ADR-028 で完全に撤去した。現在は、orchestrator が <strong>role を紐付けた短命セッショントークン</strong>を auth-proxy の <code>POST /session/issue</code>(静的トークンで認証)により発行し(TTL 約 35 分)、それを Bearer ヘッダへ載せた <code>.mcp.json</code> を workspace へ書き込む。コンテナ内の Claude Code は当該 MCP サーバへ接続し、<strong>自ら X 検索 tool を呼び出して</strong>トピックを収集する。<code>.mcp.json</code> の実体は次のとおりである。</p>
+<pre><code class="language-json">{
+  &quot;mcpServers&quot;: {
+    &quot;x7mimi&quot;: {
+      &quot;type&quot;: &quot;http&quot;,
+      &quot;url&quot;: &quot;http://auth-proxy:18081/mcp&quot;,
+      &quot;headers&quot;: { &quot;Authorization&quot;: &quot;Bearer &lt;role 付き短命 token&gt;&quot; }
+    }
+  }
+}</code></pre>
+<p>起動は <code>--mcp-config /workspace/.mcp.json --strict-mcp-config</code> で配線する。Claude Code は MCP サーバ名(<code>x7mimi</code>)と tool 名からツール ID を合成するため、<code>allowedTools</code> には<strong>ドットをアンダースコアへ変換した</strong> <code>mcp__x7mimi__x_search_posts_recent</code> の形式で列挙する(4 tool 分)。この HTTP-MCP における「<code>--mcp-config</code> の <code>headers</code> が実際に上流へ Authorization を付与するか」という挙動は事前に小規模な spike で確認し、回帰を防ぐため Claude Code のバージョンを Dockerfile で pin している。</p>
+<p><strong>認可とコストは LLM の外側で決定的に締める。</strong> これが直結化の要諦である。<code>/mcp</code> は Go 側で <strong>role×tool を判定</strong>し、<code>tools/list</code> の時点で role が許可されない tool を除去するため、コンテナ内 Claude は禁止 tool を認識すらできない(拒否は JSON-RPC error + block 監査)。さらに <code>/mcp</code> は read-only な evidence/signal tool <strong>のみ</strong>を載せ、書き込み境界(git relay / Slack)は別サーフェスへ配置している — 自己選択が安全である根拠は「可視なのが読み取りのみ」だからである。コスト暴走に対しては二段構えとし、プロンプトの guardrail(検索は合計最大 12 回・<code>max_results</code> ≤ 10・再試行禁止)は<strong>あくまで補助</strong>とし、決定的なバックストップを <code>/mcp</code> のセッション単位の<strong>ハード呼び出し上限</strong>(<code>AUTH_PROXY_MCP_CALL_CAP</code>)に置く。上限超過の <code>tools/call</code> は LLM の主張にかかわらず拒否される。</p>
+<p><strong>事前収集を廃し直結化した理由は、品質と拡張性にある。</strong> 事前収集では orchestrator が決め打ちのクエリ集合を一度投げるのみであったが、直結であれば Claude が「1 回目の検索結果を踏まえて次のクエリを決定する」反復が可能となり、収集トピックの質が向上する。横展開(投資クラスタ等の別ジョブ)も、収集ロジックを Python 側に追記するのではなく role とプロンプトを追加するだけで済む。一見「LLM に権限を委譲した」ように映るが、第 1 節の<strong>「信頼しない設計」</strong>の観点では、むしろ強化である — 認可判定を orchestrator プロセス内の PreToolUse hook から Go 境界のネットワーク呼び出しへ移すことで、runner 内からの回避が困難となり、上限も LLM の外側の決定的コードが掌握する。プロンプトの「12 回まで」は破られ得ても、<code>AUTH_PROXY_MCP_CALL_CAP</code> は破られない。</p>
+<p><strong>allowedTools は最小構成とする。</strong> コンテナ内 Claude は <code>Read,Write,WebFetch,Bash(git:*)</code> に上記 4 つの MCP 検索 tool を加えた構成で起動する。X を検索し、トピックを選定し、WebFetch で一次情報を確認し、日本語で執筆し、git relay 経由で push する — それ以外の道具は与えられない。</p>
+<p><strong>検証は clone-back により行う。</strong> 「push した」という LLM の自己申告は信用せず、orchestrator が relay 経由で notes repo を <code>--depth 1</code> で再 clone し、期待パスにファイルが存在し日本語(非 ASCII)を含むことを機械的に確認してから published を記録する。</p>
+<p><strong>日付はレース条件を排除し一度だけ決定する。</strong> 日付を使用する箇所が 3 つ(プロンプト・実行・検証)存在するため、実行が日付境界をまたぐと「プロンプトは 7/4 のパスを指示したが検証は 7/5 のパスを参照する」不整合が生じ得る。対策はコード内コメントがそのまま説明となっている。</p>
+<pre><code class="language-python">    # Compute the target date once, up front: this is the single source of
+    # truth for the digest path used in the prompt, the docker run, and the
+    # clone-back verification, so a date rollover mid-run cannot cause the
+    # prompt and the verification step to disagree on which file to check.
+    date = now_jst().date()
+    relative_path = f&quot;daily/{date:%Y}/{date:%m}/{date.isoformat()}.md&quot;</code></pre>
+<p>プロンプトにも「このパスは orchestrator が確定させた対象日付のパスである。別の日付のパスを使用しないこと」と明記し、LLM の裁量から日付を除外している。構成・文体は自由とする一方、日付・保存パス・不変条件(X はシグナル、助言禁止、大量転載禁止)は固定する — この裁量と強制の線引きが本ジョブの設計そのものである。</p>
+
+<h2 id="s10">10. 投資ダイジェストと Slack 連携</h2>
+<p>夕方の投資ジョブ <code>invest-x-daily-digest</code>(ADR-026、<code>runner/invest_digest.py</code>)は claude-digest の姉妹実装であるが、性格は大きく異なる。</p>
+<p><strong>出力先が Slack である。</strong> 投資シグナルは鮮度が価値であるため、リポジトリに配置する pull 型ではなく push 型が適切である。auth-proxy に <code>POST /v1/slack/notify</code> を追加し、Slack bot token はそこのみが保持する。本文は行境界を保持したまま 3500 字ごとに分割投稿する。当初は Incoming Webhook を想定していたが、将来のメンション受信(Events/Socket Mode)への拡張を見越して bot token 方式へ改めた。</p>
+<p><strong>runner の権限はさらに狭い。</strong> allowedTools は <code>Read,Write,WebFetch</code> のみであり、<strong>git relay も Slack への経路も付与しない</strong>。コンテナ内 Claude の職務は workspace へ <code>digest.md</code> を書くことのみで、Slack への送信は orchestrator が hook 認可(<code>slack.post_digest</code>)を通過させたうえで auth-proxy 経由で実行する。「執筆する者」と「送信する者」を分離する構図である。</p>
+<p><strong>evidence の階層を明文化する。</strong> プロンプトの不変条件により、各トピックを「確認済み事実」(WebFetch で一次情報を実確認できたもの、URL 必須)と「X シグナル(未確認)」へ必ず分離させる。<strong>暗号資産のトピックは既定で未確認扱い</strong>とし、protocol/exchange/issuer の公式発表を確認できた場合にのみ verified と記述できる。噂が金銭的価値を持つ領域ほどラベルを厳格化する判断である。</p>
+<p>本仕様の策定では product-manager エージェントによるレビューが有効に機能した。投資領域は「観測整理」と「助言」の距離が近く、push 型チャネルでは知覚リスクも上昇する。PM 役の承認条件が「免責をプロンプト依存にしないこと」であり、それが第 8 節の決定的フッター(orchestrator が送信直前に付加)として実装されている。「買い」「売り」「おすすめ」等の断定・推奨表現の禁止も、roles/policy の anti-goal として明文化した。</p>
+
+<h2 id="s11">11. 開発プロセス — エージェントによる分業</h2>
+<p>本リポジトリのコードは、その大半を<strong>サブエージェントの分業により記述している</strong>。オーケストレーターが Issue と仕様を確定し、implementer(実装)→ tester(テスト作成・実行)→ reviewer(セキュリティ/アーキテクチャレビュー)のループを回す。tester は <code>[TEST-EXECUTION]: SUCCESS | FAIL | SPEC-ISSUE</code>、reviewer は <code>[CODE-REVIEW]: APPROVE | CONCERNS | REJECT | SPEC-ISSUE</code> という機械可読な判定を返し、<strong>SUCCESS かつ APPROVE が揃うまでマージしない</strong>。SPEC-ISSUE が返された場合はループを停止し人間へエスカレーションする。</p>
+<p>もう一つの仕組みが <strong>Stop hook による ADR 強制</strong>である。アーキテクチャ・セキュリティ境界・config に触れる変更を行ったセッションは、<code>docs/planning/adr.md</code> に ADR を追記しない限り<strong>完了がブロックされる</strong>。「後でまとめて記述する」は発生し得ない。28 本の ADR がすべてその場で記述されたのは、規律ではなく hook の強制による。</p>
+<p>このループは形式的なものではなく、実際に複数の実バグを検出した。以下に列挙する。</p>
+<ul>
+<li><strong>path policy の <code>..</code> トラバーサル脆弱性</strong> — tester が発見(第 8 節)。glob 判定前の正規化で修正。</li>
+<li><strong><code>http.Transport</code> の gzip 自動解凍が git プロトコル透過性を破壊</strong> — reviewer が指摘。<code>DisableCompression: true</code> で修正(第 6 節)。</li>
+<li><strong>git relay の <code>.git</code> 二重化 404</strong> — 実 E2E で発見。<code>TrimSuffix</code> 正規化で修正(第 6 節)。</li>
+<li><strong>compose の <code>${VAR}</code> silent degrade</strong> — 未設定の環境変数が空文字へ化け、セッショントークン検証等のセキュリティ機構が<strong>暗黙に無効化</strong>され得る問題。必須変数を <code>${VAR:?}</code> 構文へ変更し、未設定なら起動自体が失敗するようにした(reviewer 指摘。<code>tests/test_compose_config.py</code> で回帰固定)。</li>
+<li><strong>redaction の言語間ドリフト</strong> — Go/Python 二重実装の乖離をパリティテストで検出できる形に(第 8 節)。</li>
+</ul>
+<p>特筆すべきは、検出されたバグの多くが「機能が動作しない」系ではなく「<strong>セキュリティ機構が暗黙に無効化される</strong>」系であった点である。この種のバグは手動テストでは検出困難であり、fail-closed 設計とレビューエージェントの親和性が高いことを示唆する。</p>
+<p>なお運用規則として、サブエージェントはさらに孫エージェントを起動できない。委譲はオーケストレーター 1 箇所からのみとし、責任の所在を追跡可能に保っている。</p>
+
+<h2 id="s12">12. コストと運用</h2>
+<h3>12.1 モデル選択ポリシー</h3>
+<p>初回の疎通テスト(claude-smoke)でモデル指定を失念した。Claude Code の既定は高性能モデル(Opus 系)であるため、「Hello と応答するのみ」の疎通確認 1 回に <strong>$0.28</strong> を要した。金額自体は小さいが、毎日の自律実行で同様のことが起きれば無視できない。対応としてモデル選択を config 駆動とした(ADR-016)。<code>policy.yaml</code> の <code>model_policy.default_model</code>(既定 Sonnet)を role 別の <code>model:</code> フィールドで上書き可能とし、解決結果を <code>ANTHROPIC_MODEL</code> としてコンテナへ注入する。疎通テストは Haiku を既定とした。あえて proxy でのハード強制(拒否・書き換え)はしていない。目的は「<strong>意図しない</strong>高コストモデルの使用防止」であり、明示的な Opus 利用は許容したいためである。禁止と誘導の使い分けである。</p>
+<h3>12.2 X API の従量課金</h3>
+<p>X API v2 は従量課金プランで利用している。読み取り 4 tool のみに限定し、クエリごとに <code>max_results</code> を絞り、dry-run とテストは <code>X_MCP_URL</code> 未設定時に mock 収集(ADR-017 の opt-in パターン)でコストをゼロとする構えである。LLM 費用と合わせ、日次運用コストは 1 日あたり数十円〜百円台に収まっている。</p>
+<h3>12.3 常駐構成と <code>${VAR:?}</code></h3>
+<p>常駐は単一の <code>docker-compose.yml</code> による(ADR-024)。claude-proxy・auth-proxy・egress-proxy・scheduler の 4 サービスを <code>restart: unless-stopped</code> + healthcheck で稼働させ、secrets は gitignored な <code>.env</code> と read-only の pem マウントで注入する(イメージには焼き込まない)。scheduler は docker.sock をマウントして runner を sibling 起動するため、リポジトリを<strong>ホストと同一絶対パス</strong>でマウントする、やや特殊な構成となる(runner の <code>-v</code> バインドを解決するのはホストの Docker daemon であるため)。</p>
+<p>第 11 節の <code>${VAR:?}</code> 事案の結果、必須 secrets はすべてこの形式である。</p>
+<pre><code class="language-yaml">    environment:
+      AUTH_PROXY_SESSION_TOKEN: ${AUTH_PROXY_SESSION_TOKEN:?AUTH_PROXY_SESSION_TOKEN is required}
+      GITHUB_APP_ID: ${GITHUB_APP_ID:?GITHUB_APP_ID is required}</code></pre>
+<p>「設定漏れで暗黙に劣化」より「設定漏れで起動失敗」を選ぶ。運用の安全もまた fail-closed である。</p>
+
+<h2 id="s13">13. 参照アーキテクチャとの対応と既知の課題</h2>
+<h3>13.1 対応表</h3>
+<table>
+<tr><th>メルカリ pcp-agent / remote-claude</th><th>7mimi-agent での実装</th></tr>
+<tr><td>iptables DNAT でプロキシ強制</td><td>Docker <code>internal: true</code> ネットワーク + 自前 egress-proxy</td></tr>
+<tr><td>集中 ACL → スコープ限定の短命 GitHub token</td><td>GitHub App installation token(TTL 1h)を auth-proxy が mint</td></tr>
+<tr><td>credential はエージェントに渡さずダミー値</td><td>runner は credential ゼロ(セッショントークンのみ)</td></tr>
+<tr><td>PreToolUse hook の決定的強制(fail-closed)</td><td>同等(Python hook + Go 認可サービス)</td></tr>
+<tr><td>PostToolUse → DX メトリクス基盤(fail-open)</td><td>PostToolUse → SQLite 監査(fail-open)+ 各 proxy の metadata-only JSON ログ</td></tr>
+<tr><td>GCE 上のセッション隔離コンテナ(copy-on-write)</td><td>セッションごとの workspace + 使い捨て sibling コンテナ</td></tr>
+<tr><td>secrets を IaC(terraform)で一元管理</td><td><code>.env</code> + pem の手動管理(IaC 化は将来課題)</td></tr>
+<tr><td>Slack 統合(メンション起動)</td><td>Slack は通知のみ(受信は将来課題)</td></tr>
+</table>
+<h3>13.2 既知の課題</h3>
+<p>本システムには依然として未達の領域が存在する。以下に明示する。</p>
+<ul>
+<li><strong>DNAT 相当の完全強制ではない</strong> — internal ネットワーク + egress-proxy は「経路を 3 本に限定する」までを達成したが、参照アーキテクチャのように<strong>全パケットを透過的に</strong>プロキシへ吸引する DNAT ほどの強制力はない。egress-proxy 自体もドメイン allowlist(<code>EGRESS_ALLOW_HOSTS</code>)を有効化しておらず、public IP の 80/443 であれば広く通過させる。一次情報確認の網羅性とのトレードオフであり、絞り込みは今後の課題である。</li>
+<li><strong><code>Bash(git:*)</code> は厳密な実行制限ではない</strong> — Claude Code の allowedTools は文字列前置きマッチであり、git には <code>-c</code> や alias 等、任意コマンド実行に近い抜け道が存在する。ADR-021 でも「コンテナ内の残存リスク(セッショントークンの egress 経由持ち出し)」として明記済みであり、最終的な防御はコンテナ側ではなく「token で可能なのは relay 経由の 1 repo への push のみ」という credential スコープに置いている。</li>
+<li><strong>proxy ポートが LAN に開いている</strong> — sibling runner が host-gateway 経由で到達する都合で 18080/18081 を全インターフェースへ bind しており、LAN 内の第三者に対してはセッション Bearer のみが防壁となる。信頼できないネットワークではホスト firewall で遮断する運用としている。</li>
+<li><strong>ロードマップ上の未実装領域</strong> — 日本株の構造化データ(J-Quants MCP)を用いた stock research の縦断、Slack メンションからの対話起動、secrets の IaC 化等は未着手である。auth-proxy の Go 側 dev policy が <code>ai_it_topic_runner</code> しか認識していない等の整合課題も残存する。</li>
+</ul>
+<p>現在地は「完成した」ではなく「突破されても被害が限定される形に到達した」である。多層防御は、どの層が薄いかを言語化できていることまでを含めて多層防御であると考える。</p>
+
+<h2 id="s14">14. 結論</h2>
+<p>本システムの構築を通じて得られた最大の知見は、参照アーキテクチャが掲げる原則を実装として検証できたことである。すなわち — <strong>AI エージェントの安全性は、AI を賢くすることではなく、AI の外側を決定的にすることで得られる</strong>。具体的には次の 5 点に集約される。</p>
+<ul>
+<li>認証情報を渡さない(credential-free runner)</li>
+<li>経路を限定する(internal network + 3 proxies)</li>
+<li>判定を決定的に行う(fail-closed hook、token スコープ、免責フッター)</li>
+<li>記録を必ず残す(metadata-only 監査)</li>
+<li>設計判断をその場で記録する(Stop hook が強制する 28 本の ADR)</li>
+</ul>
+<p>この構造は個人開発のスケールでも十分に構築可能であった。むしろ個人開発においてこそ、「自身が休眠している間に AI が動作する」ことへの心理的障壁を下げるために、この種の構造が要請される。プロンプトで「悪意ある行動を控えるよう依頼する」ことと、悪意ある行動が構造的に不可能であることの間には、本質的な差がある。</p>
+<p>本システムのコードはすべて単一リポジトリに存在する。Go のプロキシ 3 つ、Python のオーケストレーション、hook、テスト、および設計判断の全履歴(ADR 28 本)である。追実装を試みる場合、ADR-001 から順に参照することで、mock のみの骨組みが credential-free の自律エージェントへ発展する過程を追跡できる。</p>
+<p>最後に、本システムの設計基盤を提供した参照アーキテクチャ(メルカリ pcp-agent / remote-claude)に謝意を表する。「LLM を信用しすぎない」という原則が、本レポートが報告する実装の全体を規定した。</p>
+<p class="note">対象システム: 7mimi-agent(しちみみ)。本レポートの全記述はライト/ダーク両テーマに対応し、右上のボタンで切り替えられる。</p>
+
+</main>
+<script type="module">
+  // 固定バージョンに pin(floating @11 だと CDN 側更新で挙動が変わり得るため)。
+  // レポート表示用の静的ドキュメントであり、プラットフォーム実行系とは独立。
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs";
+  const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  mermaid.initialize({ startOnLoad: true, theme: dark ? "dark" : "default" });
+</script>
+</body>
+</html>
