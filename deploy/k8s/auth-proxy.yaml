@@ -1,0 +1,128 @@
+# External tool/API credential boundary + git relay + x-mcp + slack notify
+# (ADR-012 / ADR-020 / ADR-023 / ADR-026, ADR-024 translated to k8s).
+# Translated from docker-compose.yml's auth-proxy service.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-proxy
+  namespace: 7mimi-agent
+  labels:
+    app.kubernetes.io/name: auth-proxy
+    app.kubernetes.io/part-of: 7mimi-agent
+    app.kubernetes.io/component: proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: auth-proxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: auth-proxy
+        app.kubernetes.io/part-of: 7mimi-agent
+        app.kubernetes.io/component: proxy
+    spec:
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+      # Pod Security "restricted" equivalent (Issue #29 hardening pass). No
+      # explicit runAsUser: services/auth-proxy/Dockerfile builds FROM
+      # gcr.io/distroless/static-debian12:nonroot, which already defaults to
+      # a non-zero UID -- runAsNonRoot: true just asserts that stays true
+      # rather than hardcoding a UID this manifest doesn't own.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: auth-proxy
+          image: ghcr.io/7milch/7mimi-agent-auth-proxy
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: http
+              containerPort: 18081
+          env:
+            - name: AUTH_PROXY_SESSION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: 7mimi-agent-secrets
+                  key: AUTH_PROXY_SESSION_TOKEN
+            - name: GITHUB_APP_ID
+              valueFrom:
+                secretKeyRef:
+                  name: 7mimi-agent-secrets
+                  key: GITHUB_APP_ID
+            - name: GITHUB_APP_INSTALLATION_ID
+              valueFrom:
+                secretKeyRef:
+                  name: 7mimi-agent-secrets
+                  key: GITHUB_APP_INSTALLATION_ID
+                  optional: true
+            - name: GITHUB_APP_PRIVATE_KEY_PATH
+              value: /secrets/github-app-key.pem
+            - name: X_BEARER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: 7mimi-agent-secrets
+                  key: X_BEARER_TOKEN
+            # ADR-026: optional. Unset (Secret key absent) leaves
+            # /v1/slack/notify unmounted; invest-x-daily-digest just can't
+            # publish. Never required for the deployment to come up.
+            - name: SLACK_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: 7mimi-agent-secrets
+                  key: SLACK_BOT_TOKEN
+                  optional: true
+            - name: SLACK_CHANNEL_ID
+              valueFrom:
+                secretKeyRef:
+                  name: 7mimi-agent-secrets
+                  key: SLACK_CHANNEL_ID
+                  optional: true
+            # ADR-028: deterministic per-session hard cap on /mcp tool calls.
+            - name: AUTH_PROXY_MCP_CALL_CAP
+              value: "60"
+          volumeMounts:
+            - name: github-app-key
+              mountPath: /secrets
+              readOnly: true
+          livenessProbe:
+            exec:
+              command: ["/auth-proxy", "-healthcheck"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+          readinessProbe:
+            exec:
+              command: ["/auth-proxy", "-healthcheck"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+      volumes:
+        - name: github-app-key
+          secret:
+            secretName: github-app-key
+            items:
+              - key: github-app-key.pem
+                path: github-app-key.pem
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-proxy
+  namespace: 7mimi-agent
+  labels:
+    app.kubernetes.io/name: auth-proxy
+    app.kubernetes.io/part-of: 7mimi-agent
+spec:
+  selector:
+    app.kubernetes.io/name: auth-proxy
+  ports:
+    - name: http
+      port: 18081
+      targetPort: http

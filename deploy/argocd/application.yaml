@@ -1,0 +1,32 @@
+# Issue #29: ArgoCD Application for the 7mimi-agent resident stack.
+# Apply once by hand (or via `argocd app create -f`) against the cluster's
+# ArgoCD; this file itself is not deployed by CI (build-images.yaml only
+# builds/pushes images -- rollout is ArgoCD's job, per ADR discipline: CD
+# stays out of GitHub Actions).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: 7mimi-agent
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/7milch/7mimi-agent.git
+    targetRevision: main
+    path: deploy/k8s
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: 7mimi-agent
+  syncPolicy:
+    # Deliberately not fully hands-off (no `prune: true`): this namespace
+    # holds the Secret-backed proxy boundary and the only production
+    # instance of the scheduler, so an accidental manifest deletion
+    # pruning live resources is worse than an operator having to click
+    # "Sync" after a bad merge. selfHeal is kept on so drift (e.g. someone
+    # `kubectl edit`-ing a Deployment by hand) still gets reconciled back to
+    # what's in git. Revisit once the deploy has a track record.
+    automated:
+      selfHeal: true
+      prune: false
+    syncOptions:
+      - CreateNamespace=false

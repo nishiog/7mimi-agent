@@ -1,0 +1,44 @@
+# Scheduler's own k8s API footprint (KubernetesRunnerBackend, Issue #29):
+# create runner Jobs and poll their `.status` for completion (no `watch`,
+# see src/shichimimi_agent/runner/kubernetes_runner.py `_wait_for_completion`),
+# and GET its own Pod (self-lookup of the mounted ConfigMap name, see
+# `_resolve_configmap_name` and the long comment in kustomization.yaml) --
+# that self-lookup is the only reason `pods` is here at all, so it's scoped
+# to `get` only (no `list`, the backend always knows its own Pod name via
+# the POD_NAME Downward API env var). No `pods/log` -- KubernetesRunnerBackend
+# reads results from the shared PVC's result.json, never from Pod logs. No
+# `delete` -- Jobs clean themselves up via ttlSecondsAfterFinished.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: 7mimi-scheduler
+  namespace: 7mimi-agent
+imagePullSecrets:
+  - name: ghcr-pull-secret
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: 7mimi-scheduler-runner-jobs
+  namespace: 7mimi-agent
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: 7mimi-scheduler-runner-jobs
+  namespace: 7mimi-agent
+subjects:
+  - kind: ServiceAccount
+    name: 7mimi-scheduler
+    namespace: 7mimi-agent
+roleRef:
+  kind: Role
+  name: 7mimi-scheduler-runner-jobs
+  apiGroup: rbac.authorization.k8s.io

@@ -1,0 +1,11 @@
+# Issue #29: k3s + ArgoCD deploy. Own namespace, istio sidecar injection
+# explicitly disabled (istio runs in a separate namespace on the target
+# cluster; agent-runner egress is meant to go through egress-proxy only,
+# ADR-025, not through an istio sidecar).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: 7mimi-agent
+  labels:
+    app.kubernetes.io/part-of: 7mimi-agent
+    istio-injection: disabled

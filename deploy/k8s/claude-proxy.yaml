@@ -1,0 +1,80 @@
+# Claude API credential boundary (ADR-012 / ADR-024 translated to k8s).
+# Translated from docker-compose.yml's claude-proxy service.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: claude-proxy
+  namespace: 7mimi-agent
+  labels:
+    app.kubernetes.io/name: claude-proxy
+    app.kubernetes.io/part-of: 7mimi-agent
+    app.kubernetes.io/component: proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: claude-proxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: claude-proxy
+        app.kubernetes.io/part-of: 7mimi-agent
+        app.kubernetes.io/component: proxy
+    spec:
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+      # Pod Security "restricted" equivalent (Issue #29 hardening pass). No
+      # explicit runAsUser: services/claude-proxy/Dockerfile builds FROM
+      # gcr.io/distroless/static-debian12:nonroot, which already defaults to
+      # a non-zero UID -- runAsNonRoot: true just asserts that stays true
+      # rather than hardcoding a UID this manifest doesn't own.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: claude-proxy
+          image: ghcr.io/7milch/7mimi-agent-claude-proxy
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: http
+              containerPort: 18080
+          env:
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: 7mimi-agent-secrets
+                  key: ANTHROPIC_API_KEY
+          livenessProbe:
+            exec:
+              command: ["/claude-proxy", "-healthcheck"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+          readinessProbe:
+            exec:
+              command: ["/claude-proxy", "-healthcheck"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: claude-proxy
+  namespace: 7mimi-agent
+  labels:
+    app.kubernetes.io/name: claude-proxy
+    app.kubernetes.io/part-of: 7mimi-agent
+spec:
+  selector:
+    app.kubernetes.io/name: claude-proxy
+  ports:
+    - name: http
+      port: 18080
+      targetPort: http

@@ -43,6 +43,9 @@ Owner: 7milch
    - [Architecture Decision Records](planning/adr.md)
    - [Open questions](planning/open-questions.md)
 
+6. Deployment
+   - [k3s + ArgoCD](deployment/k3s-argocd.md)
+
 ## Related repositories
 
 - Agent system: `7milch/7mimi-agent`

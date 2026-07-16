@@ -1,0 +1,132 @@
+# ADR-025 (agent-runner egress goes through egress-proxy only) translated
+# from the compose `internal: true` Docker network to k8s NetworkPolicy.
+# k3s bundles Flannel for pod networking, but *also* runs an embedded
+# kube-router netpol controller by default specifically to enforce
+# NetworkPolicy objects on top of it -- these policies are NOT inert on a
+# stock k3s install. They only become inert if the cluster was started with
+# `--disable-network-policy` (or an equivalent Helm/config override). Treat
+# that as an acceptance criterion: verify on the target k3s node
+# (`k3s server --help` / server args) that `--disable-network-policy` is not
+# set before relying on this file for isolation.
+
+# 1) Runner Job pods (KubernetesRunnerBackend, kubernetes_runner.py): deny
+#    all ingress, and egress restricted to the 3 proxies + kube-dns. This is
+#    the direct translation of compose's `internal: true` network.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: runner-default-deny
+  namespace: 7mimi-agent
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: 7mimi-agent-runner
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: proxy
+      ports:
+        - protocol: TCP
+          port: 18080
+        - protocol: TCP
+          port: 18081
+        - protocol: TCP
+          port: 18082
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# 2) Scheduler pod: egress restricted to the 3 proxies + kube-dns +
+#    kube-apiserver. Ingress is left unrestricted (the scheduler exposes no
+#    Service and receives no inbound traffic from other pods; nothing in
+#    the spec asks for an ingress-deny here).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: scheduler-egress
+  namespace: 7mimi-agent
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: scheduler
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: proxy
+      ports:
+        - protocol: TCP
+          port: 18080
+        - protocol: TCP
+          port: 18081
+        - protocol: TCP
+          port: 18082
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # kube-apiserver has no stable podSelector-able identity on k3s (its
+    # embedded in the k3s server process, not a regular kube-system pod),
+    # so unlike the two rules above this is not scoped by `to:` -- only by
+    # port. This is broader than "apiserver only" but is the standard,
+    # cluster-portable way to allow apiserver egress in NetworkPolicy
+    # (see also RBAC in rbac.yaml, which bounds what the scheduler can
+    # actually *do* once connected to 443/6443).
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+---
+# 3) Proxy pods (claude-proxy / auth-proxy / egress-proxy): restrict ingress
+#    to same-namespace callers on their own ports; egress is intentionally
+#    left unrestricted here (egress-proxy's Go app layer is what enforces
+#    the actual destination allow/deny for WebFetch traffic, ADR-025; the
+#    other two proxies need open egress to reach Anthropic/GitHub/X/Slack
+#    upstreams).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: proxy-ingress-restrict
+  namespace: 7mimi-agent
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: proxy
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 18080
+        - protocol: TCP
+          port: 18081
+        - protocol: TCP
+          port: 18082

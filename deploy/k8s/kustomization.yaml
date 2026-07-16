@@ -1,0 +1,70 @@
+# Issue #29: k3s + ArgoCD deploy manifests for the 7mimi-agent resident
+# stack (translated from docker-compose.yml). ArgoCD Application
+# (deploy/argocd/application.yaml) points at this directory.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: 7mimi-agent
+
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - pvc.yaml
+  - claude-proxy.yaml
+  - auth-proxy.yaml
+  - egress-proxy.yaml
+  - scheduler.yaml
+  - networkpolicy.yaml
+
+# Generates a ConfigMap from the repo's own config/*.yaml (the same 3 files
+# config/loader.py reads at runtime), with the default hash suffix left
+# enabled: config changes get a new ConfigMap name, which (via the
+# `replacements` block below, and Kustomize's built-in volume name-reference
+# rewriting) forces a scheduler rollout and a fresh runner Job ConfigMap
+# reference on every config change -- no manual restart needed.
+configMapGenerator:
+  - name: 7mimi-agent-config
+    files:
+      - ../../config/roles.yaml
+      - ../../config/policy.yaml
+      - ../../config/schedules.yaml
+
+# Single place to bump image tags. `agent-runner` is not referenced by any
+# static resource here (runner Jobs are created dynamically by
+# KubernetesRunnerBackend, not declared in these manifests), so its tag is
+# instead pinned via the RUNNER_IMAGE env var on the scheduler Deployment
+# (scheduler.yaml) -- keep the two in sync by hand until that's templated.
+# Tags are git SHAs (immutable); `:latest` is never used here. CI
+# (.github/workflows/build-images.yaml) publishes these tags; it does not
+# rewrite this file -- rollout is ArgoCD's job, not CI's.
+images:
+  - name: ghcr.io/7milch/7mimi-agent-scheduler
+    newTag: sha-395226e651ce
+  - name: ghcr.io/7milch/7mimi-agent-claude-proxy
+    newTag: sha-395226e651ce
+  - name: ghcr.io/7milch/7mimi-agent-auth-proxy
+    newTag: sha-395226e651ce
+  - name: ghcr.io/7milch/7mimi-agent-egress-proxy
+    newTag: sha-395226e651ce
+
+# NOTE (deviation from the original spec, see PR/issue notes): the spec
+# asked for a `replacements` block here to inject the generated ConfigMap's
+# hash-suffixed name into the scheduler's RUNNER_CONFIGMAP_NAME env var.
+# Verified against kubectl's bundled kustomize (v5.8.1) that this does not
+# work: ReplacementTransformer reads a configMapGenerator source's
+# `metadata.name` *before* the hash-suffix transformer runs (confirmed with
+# both a single-layer and a base+overlay two-layer reproduction), so the
+# replacement always resolves to the pre-hash name -- a ConfigMap that does
+# not actually exist in the cluster. Using that value would make every
+# runner Job fail to start (configmap not found).
+#
+# Instead, KubernetesRunnerBackend (src/shichimimi_agent/runner/
+# kubernetes_runner.py) resolves the live ConfigMap name at Job-creation
+# time by reading the scheduler's own Pod spec back from the k8s API (GET
+# .../pods/$POD_NAME, Downward API below) and taking whatever is currently
+# mounted as the "config" volume. This gets the same net effect the spec
+# asked for (every runner Job mounts exactly the config version the
+# scheduler that spawned it has mounted) without depending on the broken
+# build-time substitution; RUNNER_CONFIGMAP_NAME remains a supported
+# override on the scheduler Deployment for cases where self-lookup isn't
+# wanted (e.g. running the backend outside the cluster).

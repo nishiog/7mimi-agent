@@ -1,0 +1,38 @@
+name: config-validate
+
+# Required check for PRs touching config/**: config/*.yaml is the runtime
+# source of truth (CLAUDE.md), so a bad edit there must fail CI before
+# merge. Also runs the Python unittest suite so config/schema regressions
+# and other breakage surface on the same PR.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "config/**"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install -e .
+
+      - name: Validate config
+        run: python3 -m shichimimi_agent config validate
+        env:
+          PYTHONPATH: src
+
+      - name: Run unit tests
+        run: python3 -m unittest discover -s tests -v
+        env:
+          PYTHONPATH: src

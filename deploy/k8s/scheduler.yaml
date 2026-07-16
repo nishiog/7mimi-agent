@@ -1,0 +1,178 @@
+# ADR-022/024 scheduler loop, translated from docker-compose.yml's scheduler
+# service. RUNNER_BACKEND=kubernetes selects KubernetesRunnerBackend
+# (src/shichimimi_agent/runner/kubernetes_runner.py, Issue #29) in place of
+# the docker.sock sibling-container path used by compose.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduler
+  namespace: 7mimi-agent
+  labels:
+    app.kubernetes.io/name: scheduler
+    app.kubernetes.io/part-of: 7mimi-agent
+spec:
+  replicas: 1
+  strategy:
+    # Single-writer semantics for the scheduler loop; avoid two replicas
+    # racing to claim/run the same due job during a rollout.
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: scheduler
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: scheduler
+        app.kubernetes.io/part-of: 7mimi-agent
+    spec:
+      serviceAccountName: 7mimi-scheduler
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+      # local-path PV is node-local; pin here to match wherever the PVC's
+      # backing volume actually landed (single-node cluster today).
+      nodeSelector:
+        kubernetes.io/hostname: john-cooper-works
+      # Pod Security "restricted" equivalent (Issue #29 hardening pass).
+      # Dockerfile.scheduler does not set a non-root USER (python:3.13-slim
+      # defaults to root, and forcing non-root there would also break
+      # docker-compose/local-dev's host bind-mount, which needs to write as
+      # whatever UID owns the host repo) -- forced here instead, purely via
+      # k8s securityContext, which works regardless of the image's default
+      # user. 10001/10001 MUST match KubernetesRunnerOptions.run_as_user /
+      # run_as_group (kubernetes_runner.py, defaults / RUNNER_UID/RUNNER_GID
+      # below): the scheduler pre-creates `.sessions/<id>/workspace/**` via
+      # create_workspace() before handing a task to a runner Job, and both
+      # sides need to run as the same UID/GID for the Job to have write
+      # access to what the scheduler created on the shared PVC. fsGroup
+      # additionally sets the group ownership k8s applies when it first
+      # provisions the PVC's subPath directories.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: scheduler
+          image: ghcr.io/7milch/7mimi-agent-scheduler
+          command: ["python", "-m", "shichimimi_agent", "schedule", "run"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: PYTHONPATH
+              value: /app/src
+            - name: TZ
+              value: Asia/Tokyo
+            - name: RUNNER_BACKEND
+              value: kubernetes
+            # Non-root, no matching /etc/passwd entry (see securityContext
+            # above) -- pin $HOME so git (clone-back verification, ADR-021)
+            # and anything doing expanduser("~") don't fail on a missing
+            # passwd lookup.
+            - name: HOME
+              value: /tmp
+            # KubernetesRunnerBackend needs to know which Pod it's running
+            # as so it can read back its own volume spec (Downward API) and
+            # pick up whatever ConfigMap is *actually* mounted at
+            # /app/config right now -- see the long comment in
+            # kustomization.yaml for why this replaces a build-time
+            # `replacements` substitution of the hash-suffixed ConfigMap
+            # name (kustomize does not resolve that correctly).
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: X_MCP_URL
+              value: http://auth-proxy:18081
+            - name: X_MCP_SESSION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: 7mimi-agent-secrets
+                  key: AUTH_PROXY_SESSION_TOKEN
+            - name: CLAUDE_PROXY_URL
+              value: http://claude-proxy:18080
+            - name: CLAUDE_PROXY_SESSION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: 7mimi-agent-secrets
+                  key: CLAUDE_PROXY_SESSION_TOKEN
+            - name: GIT_PROXY_URL
+              value: http://auth-proxy:18081
+            - name: GIT_PROXY_SESSION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: 7mimi-agent-secrets
+                  key: AUTH_PROXY_SESSION_TOKEN
+            - name: GIT_PROXY_URL_HOST
+              value: http://auth-proxy:18081
+            # Runner-facing wiring picked up by KubernetesRunnerBackend when
+            # it builds each Job's container env (allowlist mirrors
+            # ContainerRunnerBackend's, see kubernetes_runner.py).
+            - name: AUTH_PROXY_URL
+              value: http://auth-proxy:18081
+            - name: AUTH_PROXY_SESSION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: 7mimi-agent-secrets
+                  key: AUTH_PROXY_SESSION_TOKEN
+            - name: SLACK_NOTIFY_URL
+              value: http://auth-proxy:18081
+            - name: SLACK_NOTIFY_SESSION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: 7mimi-agent-secrets
+                  key: AUTH_PROXY_SESSION_TOKEN
+            # KubernetesRunnerBackend defaults (kubernetes_runner.py); kept
+            # explicit here so the manifest is the single place that pins
+            # the runner image tag/node/PVC, matching the `images:` and
+            # nodeSelector used above for the scheduler itself.
+            - name: RUNNER_IMAGE
+              value: ghcr.io/7milch/7mimi-agent-agent-runner:sha-395226e651ce
+            - name: RUNNER_NODE_HOSTNAME
+              value: john-cooper-works
+            - name: RUNNER_PVC_NAME
+              value: 7mimi-agent-data
+            - name: RUNNER_IMAGE_PULL_SECRET
+              value: ghcr-pull-secret
+            # Must equal this Deployment's own securityContext.runAsUser/
+            # runAsGroup above -- see that comment for why.
+            - name: RUNNER_UID
+              value: "10001"
+            - name: RUNNER_GID
+              value: "10001"
+          volumeMounts:
+            - name: config
+              mountPath: /app/config
+            - name: data
+              mountPath: /app/.data
+              subPath: data
+            - name: sessions
+              mountPath: /app/.sessions
+              subPath: sessions
+          resources:
+            requests:
+              memory: 256Mi
+              cpu: 100m
+            limits:
+              memory: 512Mi
+      volumes:
+        # No subPath here: the app expects config/roles.yaml etc. as plain
+        # files directly under /app/config, and subPath mounts would also
+        # defeat the point of the hash-suffixed ConfigMap (no volume remount
+        # -> no rollout -> stale config after `kubectl apply`).
+        - name: config
+          configMap:
+            name: 7mimi-agent-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: 7mimi-agent-data
+        - name: sessions
+          persistentVolumeClaim:
+            claimName: 7mimi-agent-data

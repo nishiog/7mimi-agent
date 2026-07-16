@@ -1,0 +1,18 @@
+# Single PVC shared by the scheduler Deployment and per-task runner Jobs
+# (subPath "data" -> /app/.data, subPath "sessions" -> /app/.sessions; see
+# scheduler.yaml and src/shichimimi_agent/runner/kubernetes_runner.py).
+# local-path is the cluster's default StorageClass and is node-local, hence
+# the nodeSelector pin to john-cooper-works on both the scheduler Deployment
+# and runner Jobs.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: 7mimi-agent-data
+  namespace: 7mimi-agent
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi

@@ -15,6 +15,12 @@ def connect(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # Issue #29: scheduler Deployment Pod and runner Job Pods share one
+    # SQLite file over a PVC and may write concurrently; WAL + a busy
+    # timeout let writers block-and-retry instead of raising
+    # "database is locked" immediately.
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA journal_mode = WAL")
     return conn
 
 

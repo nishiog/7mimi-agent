@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -9,7 +10,14 @@ from typing import Any
 from shichimimi_agent.config import load_config, validate_config
 from shichimimi_agent.config.model_selection import resolve_model
 from shichimimi_agent.db import Repository, default_db_path, migrate
-from shichimimi_agent.runner import ContainerRunnerBackend, ContainerRunnerOptions, LocalRunnerBackend, RunnerTask, execute_runner_task
+from shichimimi_agent.runner import (
+    ContainerRunnerBackend,
+    ContainerRunnerOptions,
+    KubernetesRunnerBackend,
+    LocalRunnerBackend,
+    RunnerTask,
+    execute_runner_task,
+)
 from shichimimi_agent.sessions.workspace import create_workspace
 
 
@@ -247,6 +255,8 @@ def cmd_run_job(args: argparse.Namespace) -> int:
 
     if args.runner == "local":
         backend = LocalRunnerBackend(config=config, repository=repository)
+    elif args.runner == "kubernetes":
+        backend = KubernetesRunnerBackend(root=config.root)
     else:
         backend = ContainerRunnerBackend(
             root=config.root,
@@ -265,7 +275,16 @@ def cmd_run_job(args: argparse.Namespace) -> int:
 
 
 def cmd_runner_execute(args: argparse.Namespace) -> int:
-    """Execute an already-created task inside agent-runner container."""
+    """Execute an already-created task inside agent-runner container.
+
+    Writes the result JSON to stdout (kept for ContainerRunnerBackend, which
+    reads the subprocess's captured stdout) and, additionally, to
+    `.sessions/<session_id>/result.json` under the resolved project root.
+    KubernetesRunnerBackend cannot capture Job Pod stdout the way
+    ContainerRunnerBackend captures `docker run` stdout (no watch/exec
+    session, per Issue #29's no-watch polling design), so it reads that file
+    back from the shared PVC instead (see runner/kubernetes_runner.py).
+    """
     try:
         config = _load_validated_config(args.runner_root or args.root)
     except ValueError as exc:
@@ -275,12 +294,21 @@ def cmd_runner_execute(args: argparse.Namespace) -> int:
     repository = Repository.for_root(config.root)
     job = _find_job(config, args.name)
     task = RunnerTask(job_name=args.name, job=job, session_id=args.session_id, task_id=args.task_id, role=job["role"], dry_run=args.dry_run)
+
+    def _write_result_file(payload: dict[str, Any]) -> None:
+        result_dir = config.root / ".sessions" / args.session_id
+        result_dir.mkdir(parents=True, exist_ok=True)
+        (result_dir / "result.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
     try:
         result = execute_runner_task(config=config, repository=repository, task=task)
         print(json.dumps(result.payload, ensure_ascii=False))
+        _write_result_file(result.payload)
         return 0
     except Exception as exc:
-        print(json.dumps({"status": "failed", "error": {"type": type(exc).__name__, "message": str(exc)}}, ensure_ascii=False))
+        payload = {"status": "failed", "error": {"type": type(exc).__name__, "message": str(exc)}}
+        print(json.dumps(payload, ensure_ascii=False))
+        _write_result_file(payload)
         return 1
 
 
@@ -626,7 +654,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Accepted for compatibility; runs are always dry-run at the CLI level (ADR-020, publishing is via the git relay).",
     )
-    run_job.add_argument("--runner", choices=["local", "container"], default="local")
+    run_job.add_argument(
+        "--runner",
+        choices=["local", "container", "kubernetes"],
+        default=os.environ.get("RUNNER_BACKEND", "local"),
+        help="Runner backend. Falls back to RUNNER_BACKEND env var, then 'local' (Issue #29 adds 'kubernetes').",
+    )
     run_job.add_argument("--image", default="7mimi-agent-runner:latest")
     run_job.add_argument("--network", default="none")
     run_job.add_argument("--memory", default="2g")

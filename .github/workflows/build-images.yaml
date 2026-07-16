@@ -1,0 +1,90 @@
+name: build-images
+
+# Builds and pushes the 5 images this repo ships as immutable, short-git-SHA
+# tagged images to ghcr.io. Deploy/rollout is ArgoCD's job (Issue #29): this
+# workflow never touches deploy/k8s, and it never applies `:latest` tags.
+#
+# Tag shape MUST match deploy/k8s/kustomization.yaml's `images[].newTag` and
+# deploy/k8s/scheduler.yaml's RUNNER_IMAGE: sha-<12 lowercase hex chars>
+# (e.g. sha-395226e651ce). A mismatch here is a silent ImagePullBackOff on
+# rollout, so tests/test_github_workflows.py and tests/test_k8s_manifests.py
+# both assert this convention -- keep SHORT_SHA_LENGTH and the manifests'
+# tags in the same shape if you ever change this.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: 7milch
+  SHORT_SHA_LENGTH: 12
+
+jobs:
+  build-python-images:
+    strategy:
+      matrix:
+        image:
+          - name: 7mimi-agent-scheduler
+            dockerfile: Dockerfile.scheduler
+            context: .
+          - name: 7mimi-agent-agent-runner
+            dockerfile: Dockerfile.agent-runner
+            context: .
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute short SHA tag
+        id: tag
+        run: echo "value=sha-${GITHUB_SHA:0:$SHORT_SHA_LENGTH}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.image.context }}
+          file: ${{ matrix.image.dockerfile }}
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.OWNER }}/${{ matrix.image.name }}:${{ steps.tag.outputs.value }}
+
+  build-go-proxy-images:
+    strategy:
+      matrix:
+        service: [claude-proxy, auth-proxy, egress-proxy]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute short SHA tag
+        id: tag
+        run: echo "value=sha-${GITHUB_SHA:0:$SHORT_SHA_LENGTH}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: services/${{ matrix.service }}
+          file: services/${{ matrix.service }}/Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.OWNER }}/7mimi-agent-${{ matrix.service }}:${{ steps.tag.outputs.value }}

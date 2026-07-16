@@ -8,37 +8,19 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # git: needed by scheduler-side helpers that shell out to git (clone-back
-# verification etc., ADR-021). docker-cli: the scheduler launches agent-runner
-# as a sibling container via the mounted host /var/run/docker.sock (ADR-024);
-# it only needs the `docker` CLI binary, not a Docker daemon of its own.
+# verification etc., ADR-021).
 #
-# Debian slim's `docker.io` package pulls in the full daemon/containerd stack
-# (~200MB) just to get the CLI. Instead we install the statically linked
-# `docker` CLI-only tarball from Docker's official download server (no
-# daemon, no containerd, no extra apt sources) and discard everything except
-# the `docker` binary itself.
-# Docker does not publish a .sha256 file alongside this tarball, so the
-# checksums below were computed by hand (sha256sum) against the exact
-# download URLs on 2026-07-05 and are pinned here; bump both together with
-# DOCKER_CLI_VERSION when upgrading.
-ARG DOCKER_CLI_VERSION=27.3.1
-ARG DOCKER_CLI_SHA256_AMD64=9b4f6fe406e50f9085ee474c451e2bb5adb119a03591f467922d3b4e2ddf31d3
-ARG DOCKER_CLI_SHA256_ARM64=4da6a6c7502b7ab561675a5ff5ac192d9b49d76d0b8847cf17ade246122279f4
+# No docker CLI here (Issue #29 / k3s deploy): in-cluster, the scheduler
+# dispatches runner tasks via KubernetesRunnerBackend, which talks to the
+# k8s API directly over HTTPS (stdlib urllib) instead of a sibling
+# `docker run` on a mounted host socket. The docker.sock sibling-container
+# path (ContainerRunnerBackend, ADR-024) remains for docker-compose local/dev
+# use only, and that compose profile is *not* built from this image anymore
+# -- run compose's scheduler service against an image that still bundles the
+# `docker` CLI, or exec `docker` from the host, if you need --runner
+# container from inside a container.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git ca-certificates curl \
- && ARCH="$(dpkg --print-architecture)" \
- && case "$ARCH" in \
-      amd64) DOCKER_ARCH=x86_64; DOCKER_CLI_SHA256="$DOCKER_CLI_SHA256_AMD64" ;; \
-      arm64) DOCKER_ARCH=aarch64; DOCKER_CLI_SHA256="$DOCKER_CLI_SHA256_ARM64" ;; \
-      *) echo "unsupported architecture: $ARCH" >&2; exit 1 ;; \
-    esac \
- && curl -fsSL "https://download.docker.com/linux/static/stable/${DOCKER_ARCH}/docker-${DOCKER_CLI_VERSION}.tgz" -o /tmp/docker-cli.tgz \
- && echo "${DOCKER_CLI_SHA256}  /tmp/docker-cli.tgz" | sha256sum -c - \
- && tar -xzf /tmp/docker-cli.tgz -C /tmp \
- && install -m 0755 /tmp/docker/docker /usr/local/bin/docker \
- && rm -rf /tmp/docker-cli.tgz /tmp/docker \
- && apt-get purge -y curl \
- && apt-get autoremove -y \
+ && apt-get install -y --no-install-recommends git ca-certificates \
  && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml README.md ./
@@ -47,11 +29,12 @@ COPY src ./src
 RUN pip install --upgrade pip \
  && pip install -e .
 
-# Runtime mounts the repository at an identical absolute path on host and
-# container (see docker-compose.yml) so that the scheduler's own
-# `docker run -v <path>` invocations for sibling agent-runner containers
-# resolve correctly on the host Docker daemon.
-WORKDIR /workspace
+# Single-root invariant (config/loader.py find_project_root): both
+# docker-compose (repo bind-mounted at an identical host path, see
+# docker-compose.yml, which also overrides working_dir explicitly) and k8s
+# (ConfigMap at /app/config, PVC at /app/.data and /app/.sessions,
+# deploy/k8s/scheduler.yaml) converge on /app (set above) as the project
+# root the process runs from.
 
 ENTRYPOINT []
 CMD ["python", "-m", "shichimimi_agent", "schedule", "run"]
