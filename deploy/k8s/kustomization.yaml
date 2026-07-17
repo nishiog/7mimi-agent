@@ -39,13 +39,13 @@ configMapGenerator:
 # rewrite this file -- rollout is ArgoCD's job, not CI's.
 images:
   - name: ghcr.io/7milch/7mimi-agent-scheduler
-    newTag: sha-a8e77394c387
+    newTag: sha-6081a9021679
   - name: ghcr.io/7milch/7mimi-agent-claude-proxy
-    newTag: sha-a8e77394c387
+    newTag: sha-6081a9021679
   - name: ghcr.io/7milch/7mimi-agent-auth-proxy
-    newTag: sha-a8e77394c387
+    newTag: sha-6081a9021679
   - name: ghcr.io/7milch/7mimi-agent-egress-proxy
-    newTag: sha-a8e77394c387
+    newTag: sha-6081a9021679
 
 # NOTE (deviation from the original spec, see PR/issue notes): the spec
 # asked for a `replacements` block here to inject the generated ConfigMap's

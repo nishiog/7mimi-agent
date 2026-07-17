@@ -134,7 +134,7 @@ spec:
             # the runner image tag/node/PVC, matching the `images:` and
             # nodeSelector used above for the scheduler itself.
             - name: RUNNER_IMAGE
-              value: ghcr.io/7milch/7mimi-agent-agent-runner:sha-a8e77394c387
+              value: ghcr.io/7milch/7mimi-agent-agent-runner:sha-6081a9021679
             - name: RUNNER_NODE_HOSTNAME
               value: john-cooper-works
             - name: RUNNER_PVC_NAME
