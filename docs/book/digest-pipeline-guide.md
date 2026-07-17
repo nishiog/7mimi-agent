@@ -43,6 +43,8 @@ sequenceDiagram
 
 *図1-1 毎朝の digest パイプライン全体。orchestrator が段取りを整え、runner の中の Claude Code が収集から執筆までを自律実行し、公開と検証は再び orchestrator 側に戻る。*
 
+本番(k3s)では `docker run` の代わりに `KubernetesClaudeLauncher` が同等のハードニングで k8s Job を起動する(ADR-033)。`docker run` 経路は compose/local-dev である。
+
 この図には、本書を貫く二層構造が現れている。**orchestrator(段取りする側)** と **runner(実行する側)** である。段取り側は認証情報を発行・管理する権限を持つが、実行側のコンテナには本物の認証情報を一切渡さない。runner が持つのは「その場限りの合言葉」であるセッショントークンだけである。この分離が、以降のすべての章の背骨になる。
 
 ### 1.1 3 つの段と、それぞれの credential
@@ -157,6 +159,8 @@ DIRECT_MCP_TOOL_NAMES = (
 ## 第3章 runner の起動 — 認証情報ゼロのコンテナを組む
 
 段取りが整うと、いよいよ runner を起動する。起動コマンドを組み立てるのが `build_docker_command` である。この関数が、本書でもっとも情報密度が高い。ここで「何を渡し、何を渡さないか」がすべて決まる。
+
+本章の `build_docker_command` は compose/local-dev の transport である。k8s 本番では同じ `ClaudeInvocation`(プロンプト・env 構築)を `KubernetesClaudeLauncher` が k8s Job として実行する(ADR-033)。
 
 ### 3.1 コンテナに渡す環境変数
 
@@ -276,7 +280,7 @@ flowchart TB
 
 ### 3.4 ネットワークの切り替え(compose とローカル)
 
-ネットワーク設定は実行環境で切り替わる。常駐スタック(docker compose)では、runner を外部への直接の出口を持たない内部ネットワークに閉じ込め、唯一の egress を egress-proxy に強制する(ADR-025)。ローカル開発では従来の bridge ネットワークを使う。
+ネットワーク設定は実行環境で切り替わる。compose(local/dev)の常駐スタックでは、runner を外部への直接の出口を持たない内部ネットワークに閉じ込め、唯一の egress を egress-proxy に強制する(ADR-025)。ローカル開発では従来の bridge ネットワークを使う。本番 k3s では NetworkPolicy が egress を強制する(ADR-032)。
 
 ```python
     runner_network = os.environ.get("RUNNER_NETWORK")

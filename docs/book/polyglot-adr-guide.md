@@ -343,7 +343,7 @@ flowchart TB
   H --> D["Decision:<br/>何を決めたか"]
   H --> R["Reason:<br/>なぜそう決めたか"]
   H --> A["append-only<br/>末尾に追記・過去は消さない"]
-  D --> ADRMD["docs/planning/adr.md<br/>全 ADR を集約(ADR-001..030)"]
+  D --> ADRMD["docs/planning/adr.md<br/>全 ADR を集約(ADR-001..033、全33本)"]
   R --> ADRMD
   A --> ADRMD
 ```
@@ -401,15 +401,16 @@ flowchart TB
 
 ## 第8章 ADR 史の要約 — 主要な転換点
 
-ADR-001 から ADR-030 までを通して読むと、このシステムが「ローカルで動く最小構成」から「認証情報を Go 境界に集約した自律システム」へと段階的に進化した軌跡が見える。主要な転換点を時系列でたどる。
+ADR-001 から ADR-033 まで(全33本)を通して読むと、このシステムが「ローカルで動く最小構成」から「認証情報を Go 境界に集約した自律システム」、そして「本番プラットフォームを k3s + ArgoCD へ移行した自律システム」へと段階的に進化した軌跡が見える。主要な転換点を時系列でたどる。
 
-### 8.1 五つの転換点
+### 8.1 六つの転換点
 
 - **ADR-006(ローカルで始め、コンテナ向けに設計)**: MVP はローカル実行で始めるが、将来のセッション隔離コンテナへ移行可能な設計にする、という出発点。
 - **ADR-012(境界を Go 化)**: 本書の主題。プロキシ境界を Go に切り出し、polyglot 構成を確立した。
 - **ADR-020(git relay)**: git 書き込みを auth-proxy の Smart HTTP 中継に一本化し、GitHub App の短命トークンで注入。ADR-018 のホスト credential 依存を解消し、「credential-free runner」を書き込みまで拡張した。
 - **ADR-023(credential 集約)**: Python 製の x-mcp-readonly を撤去し、同じ MCP 契約を auth-proxy(Go)に再実装。X credential を Go 境界へ集約し、常駐プロセスを 4→3 に削減した。
 - **ADR-028(MCP 直結)**: X シグナル収集を、orchestrator の事前収集から、runner 内 Claude Code が auth-proxy の `/mcp` を直接叩く方式へ移行。認可を Go 境界のネットワーク呼び出し上のチェックへ移し、回避を難しくした。
+- **本番プラットフォームの k3s + ArgoCD 移行(ADR-031〜033)**: docker.sock sibling → k8s Job(namespace 限定 RBAC、ADR-031)、internal 網 → NetworkPolicy(ADR-032)、ネスト docker → `KubernetesClaudeLauncher`(ADR-033)。compose は local/dev の実行形態として残る。
 
 ### 8.2 転換の一貫した方向
 

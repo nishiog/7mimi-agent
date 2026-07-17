@@ -66,9 +66,8 @@
 
       scheduler/
         __init__.py
-        scheduler.py
+        engine.py
         cron.py
-        job_runner.py
 
       sessions/
         __init__.py
@@ -78,15 +77,25 @@
 
       runner/
         __init__.py
-        agent_runner.py
+        backend.py
         local_runner.py
         container_runner.py
-        prompts.py
+        kubernetes_runner.py
+        k8s_api_client.py
+        k8s_claude_launcher.py
+        claude_digest.py
+        invest_digest.py
+        collect_x.py
+        stock_research.py
+        mcp_session.py
+        git_relay_env.py
+        claude_smoke.py
 
       proxies/
         __init__.py
         claude_proxy_client.py
         auth_proxy_client.py
+        slack_notify_client.py
 
       hooks/
         __init__.py
@@ -96,9 +105,11 @@
 
       tools/
         __init__.py
-        mcp_client.py
-        tool_types.py
-        tool_executor.py
+        # 空 placeholder。MCP client の実体は mcp/client.py にある。
+
+      mcp/
+        __init__.py
+        client.py
 
       roles/
         __init__.py
@@ -113,7 +124,6 @@
         __init__.py
         markdown.py
         repository_writer.py
-        templates.py
 
       metrics/
         __init__.py
@@ -160,7 +170,7 @@
 MVPでは、全コンポーネントを単一host上のlocal processとして扱う。ただし境界はコード上で分離する。
 
 ```text
-python -m shichimimi_agent run ai-it-daily-digest
+python -m shichimimi_agent run-job ai-it-x-daily-digest --dry-run
   ↓
 orchestrator
   ↓
@@ -177,10 +187,10 @@ local agent-runner
 
 MVPでは `claude-proxy` / `auth-proxy` は mock または in-process client として実装してよい。ただし interface は将来の独立process化を前提にする。
 
-#### 21.3.2 Target container process model
+#### 21.3.2 Local/dev container process model(compose)
 
 ```text
-host
+host (local/dev, docker compose)
   ├─ agent-server / orchestrator
   ├─ scheduler
   ├─ claude-proxy
@@ -192,6 +202,17 @@ host
        ├─ agent-runner-session-001
        ├─ agent-runner-session-002
        └─ agent-runner-scheduled-job-003
+```
+
+本番モデル(k3s、ADR-031):
+
+```text
+k3s (namespace: 7mimi, RBAC限定)
+  scheduler Pod
+    ↓ k8s API (Job create、namespace限定 RBAC)
+  runner Job / claude-digest Job (per request、1ジョブ1Pod)
+    ↓
+  claude-proxy Service / auth-proxy Service / egress-proxy Service
 ```
 
 `agent-runner` container の責務:
@@ -296,6 +317,8 @@ class ScheduleConfig:
 ### 21.5 SQLite detailed schema
 
 MVPの永続化は SQLite とする。DB path は `.data/normalized/app.sqlite`。
+
+接続時に `PRAGMA busy_timeout=5000` + `journal_mode=WAL` を設定する(k8s 共有 PVC 上の scheduler/runner 並行アクセス対策、ADR-031)。
 
 #### 21.5.1 Schema
 
@@ -603,21 +626,24 @@ sess_schedule_20260704080000_a1b2c3d4
 
 #### 21.9.1 Runner interface
 
+実際の `RunnerBackend` は単一メソッドの Protocol であり、`start_session` / `stop_session` / `RunnerHandle` は存在しない。
+
 ```python
 class RunnerBackend(Protocol):
-    def start_session(self, session: Session) -> RunnerHandle: ...
-    def run_task(self, handle: RunnerHandle, task: Task) -> RunnerResult: ...
-    def stop_session(self, handle: RunnerHandle, reason: str) -> None: ...
+    def run_task(self, task: RunnerTask) -> RunnerExecutionResult: ...
 ```
 
 実装:
 
 ```text
 LocalRunnerBackend:
-  MVP用。subprocessまたはin-processで実行。
+  in-process で実行(local/dev)。
 
 ContainerRunnerBackend:
-  Docker container per session。Phase 4以降。
+  Docker container(compose/dev)。--network none、runner-execute を container 内で再実行。
+
+KubernetesRunnerBackend:
+  k8s Job per request(本番、ADR-031)。
 ```
 
 #### 21.9.2 Agent input package
@@ -1313,6 +1339,8 @@ If push fails due non-fast-forward:
 - token scope should be limited to `7milch/ai-it-research-notes`
 - if GitHub App is used, installation should be repo-scoped
 
+実際の publish 経路は auth-proxy の git relay(ADR-020/021)経由であり、runner/scheduler は GitHub credential を保持しない。本節のローカル working copy + 直接 push は初期設計であり、現行の正は git relay 側にある。
+
 ---
 
 ### 21.18 Security detailed design
@@ -1522,11 +1550,13 @@ Initial CLI commands:
 python -m shichimimi_agent config validate
 python -m shichimimi_agent schedule list
 python -m shichimimi_agent run-job ai-it-x-daily-digest --dry-run
-python -m shichimimi_agent run-job ai-it-x-daily-digest
-python -m shichimimi_agent research-stock 7011 --dry-run
+python -m shichimimi_agent run-job ai-it-x-daily-digest --dry-run --runner container
+python -m shichimimi_agent research stock 7011
 python -m shichimimi_agent db init
 python -m shichimimi_agent db migrate
 ```
+
+`run-job` は dry-run 専用のコマンドである(ADR-020; `cli.py` で `dry_run=True` に固定され、`--dry-run` フラグは互換性のために受理されるのみ)。notes repo への publish は git relay(ADR-020/021)経由で行う。`--runner {local,container,kubernetes}` で `RunnerBackend` の実装を選択できる(既定は `local`、`RUNNER_BACKEND` 環境変数でも指定可能)。
 
 Dry-run mode:
 

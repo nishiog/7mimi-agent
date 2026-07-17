@@ -456,6 +456,8 @@ X情報は調査トリガーとしてのみ扱う。
 
 ## 14. Scheduler design
 
+実行系の正は `config/schedules.yaml` + `scheduler/engine.py`(ADR-022/029)。executor が登録されていないジョブは engine が明示 skip し、digest 系は `ai-it-x-daily-digest` / `invest-x-daily-digest` として実装済み。
+
 初期ジョブ案。
 
 ```yaml
@@ -513,7 +515,7 @@ jobs:
 
 ## 15. Metrics and observability
 
-### 14.1 Events
+### 15.1 Events
 
 ```json
 {
@@ -529,7 +531,7 @@ jobs:
 }
 ```
 
-### 14.2 Metrics to track
+### 15.2 Metrics to track
 
 - sessions count
 - jobs count
@@ -544,7 +546,7 @@ jobs:
 - average runtime
 - API quota usage
 
-### 14.3 Adoption metrics
+### 15.3 Adoption metrics
 
 Capability ではなく adoption を見る。
 

@@ -1,7 +1,7 @@
 # k3s + ArgoCD Deployment
 
-Status: Draft v0.1  
-Date: 2026-07-16  
+Status: Draft v0.2  
+Date: 2026-07-17  
 Owner: 7milch
 
 7mimi Agent の本番運用(k3s + ArgoCD、ADR-031 / ADR-032)の構築・運用手順をまとめる。docker-compose(ADR-024)は local/dev 用として別途 `docker-compose.yml` を参照すること。

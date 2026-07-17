@@ -86,7 +86,7 @@
   <div class="doc-meta">
     <span>対象システム: 7mimi-agent(しちみみ)</span>
     <span>言語構成: Python / Go(ポリグロット)</span>
-    <span>設計判断記録: ADR 全 28 本</span>
+    <span>設計判断記録: ADR 全 33 本</span>
   </div>
 </div>
 
@@ -157,7 +157,7 @@
 <p>本システムは<strong>ポリグロット構成</strong>を採る。オーケストレーション・リサーチロジック・Markdown 生成は Python(<code>src/shichimimi_agent/</code>)が担い、<strong>セキュリティ境界となるネットワークサービスはすべて Go</strong>(<code>services/</code>)で実装する(ADR-012)。ストリーミング、リバースプロキシ、静的バイナリ、コンテナ配備といった境界サービスの要件は Go の得意領域である。</p>
 <div class="mermaid">
 flowchart LR
-  subgraph host["ホスト (docker compose)"]
+  subgraph host["ホスト (docker compose) — local/dev"]
     SCH["scheduler&lt;br/&gt;(Python, cron ループ)"]
     CP["claude-proxy :18080&lt;br/&gt;(Go) ANTHROPIC_API_KEY 保持"]
     AP["auth-proxy :18081&lt;br/&gt;(Go) GitHub App key / X token / Slack bot token 保持"]
@@ -174,8 +174,31 @@ flowchart LR
   AP --&gt; GH["GitHub"] &amp; X["X API v2"] &amp; SL["Slack API"]
   EP -- "公開 Web のみ&lt;br/&gt;(private IP / api.anthropic.com 拒否)" --&gt; WEB["一次情報サイト"]
 </div>
+<p>本番(自宅 miniPC 上の k3s + ArgoCD、ADR-031/032/033)では、上記の compose sibling 構成は次の k8s 構成に置き換わる。ArgoCD が <code>deploy/k8s/</code> の Kustomize マニフェストを watch する GitOps 運用であり、docker.sock も internal ネットワークも存在しない。</p>
+<div class="mermaid">
+flowchart LR
+  subgraph argocd["ArgoCD"]
+    APP["Application&lt;br/&gt;(deploy/k8s/ を watch)"]
+  end
+  subgraph k3s["k3s (namespace: 7mimi, RBAC限定)"]
+    SCHP["scheduler Pod&lt;br/&gt;(Python, cron ループ)"]
+    CPS["claude-proxy Service&lt;br/&gt;(Go) ANTHROPIC_API_KEY 保持"]
+    APS["auth-proxy Service&lt;br/&gt;(Go) GitHub App key / X token / Slack bot token 保持"]
+    EPS["egress-proxy Service&lt;br/&gt;(Go) CONNECT proxy"]
+    JOB["runner Job / claude-digest Job&lt;br/&gt;(1リクエスト1Pod、credential ゼロ)"]
+  end
+  APP -- sync --&gt; k3s
+  SCHP -- "k8s API (Job create,&lt;br/&gt;namespace限定 RBAC)" --&gt; JOB
+  JOB -- "LLM (session token のみ)" --&gt; CPS
+  JOB -- "git push / MCP / Slack" --&gt; APS
+  JOB -- "WebFetch (HTTPS_PROXY)" --&gt; EPS
+  CPS --&gt; ANT2["Anthropic API"]
+  APS --&gt; GH2["GitHub"] &amp; X2["X API v2"] &amp; SL2["Slack API"]
+  EPS -- "公開 Web のみ" --&gt; WEB2["一次情報サイト"]
+  NP["NetworkPolicy&lt;br/&gt;default-deny + 3 proxy + kube-dns のみ許可&lt;br/&gt;(ADR-032)"]
+</div>
 <h3>4.1 ネットワークトポロジと認証情報の所在</h3>
-<p>docker-compose は 2 つのネットワークを定義する。<code>7mimi-internal</code> は <code>internal: true</code> であり、<strong>デフォルトルートを持たず外界へ出られない</strong>ネットワークである。agent-runner はこのネットワーク<strong>のみ</strong>に接続される。3 つのプロキシは internal と通常の bridge(<code>egress</code>)の双方に接続点を持つため、runner から見た「外部への出口」はこの 3 経路に限定される。認証情報の所在と併せて図示すると次のとおりである。</p>
+<p>compose(local/dev)は 2 つのネットワークを定義する。<code>7mimi-internal</code> は <code>internal: true</code> であり、<strong>デフォルトルートを持たず外界へ出られない</strong>ネットワークである。agent-runner はこのネットワーク<strong>のみ</strong>に接続される。3 つのプロキシは internal と通常の bridge(<code>egress</code>)の双方に接続点を持つため、runner から見た「外部への出口」はこの 3 経路に限定される。本番 k3s では同じ不変条件を NetworkPolicy(default-deny + 3 proxy + kube-dns のみ許可、ADR-032)が強制する。認証情報の所在と併せて図示すると次のとおりである(以下は compose/local-dev の図)。</p>
 <div class="mermaid">
 flowchart TB
   subgraph net_internal["network: 7mimi-internal (internal: true)"]
@@ -200,7 +223,7 @@ flowchart TB
 <ul>
 <li><strong>agent-runner は認証情報を一切保持しない</strong>。保持するのはセッショントークンのみである。環境変数の受け渡しも allowlist 方式であり、provider credential は仕組み上渡し得ない。</li>
 <li>実認証情報は<strong>種類ごとに単一のサービスが排他的に保持</strong>する。Anthropic API キーは claude-proxy のみ、GitHub App 秘密鍵・X Bearer・Slack bot token は auth-proxy のみが保持し、リクエスト中継の瞬間に注入される。</li>
-<li>scheduler は docker.sock を保持し、定時に agent-runner を <strong>sibling コンテナ</strong>としてホストの Docker daemon 経由で起動する(compose 管理外のオンデマンド起動)。</li>
+<li>compose(local/dev)では、scheduler は docker.sock を保持し、定時に agent-runner を <strong>sibling コンテナ</strong>としてホストの Docker daemon 経由で起動する(compose 管理外のオンデマンド起動)。本番=k3s + ArgoCD(ADR-031)では docker.sock は存在せず、scheduler Pod が namespace 限定 RBAC の k8s API 経由で Job を起動する(<code>KubernetesRunnerBackend</code>)。</li>
 </ul>
 <h3>4.2 ダイジェストジョブの実行シーケンス</h3>
 <div class="mermaid">
@@ -223,7 +246,7 @@ sequenceDiagram
   A-&gt;&gt;A: GitHub App installation token (TTL 1h) を mint して注入
   O-&gt;&gt;A: push 結果を clone-back 検証 → 監査記録
 </div>
-<p>この構成は一度に到達したものではない。設計判断記録(ADR)は 28 本存在し、初期はローカル実行の mock 収集(ADR-006)、次にホスト credential による暫定 publish(ADR-018)、git relay の完成に伴う当該暫定経路の廃止(ADR-020)と、段階的に「credential-free runner」へ収束させた。ADR-018 は当初から「自らを暫定と宣言する ADR」として記述し、後続の ADR が廃止を明記する運用を採っている。</p>
+<p>この構成は一度に到達したものではない。設計判断記録(ADR)は全 33 本存在し、初期はローカル実行の mock 収集(ADR-006)、次にホスト credential による暫定 publish(ADR-018)、git relay の完成に伴う当該暫定経路の廃止(ADR-020)と、段階的に「credential-free runner」へ収束させた。ADR-018 は当初から「自らを暫定と宣言する ADR」として記述し、後続の ADR が廃止を明記する運用を採っている。</p>
 
 <h2 id="s5">5. claude-proxy — LLM への単一経路</h2>
 <p>claude-proxy は Anthropic API のリバースプロキシである。runner 内の Claude Code は、環境変数 <code>ANTHROPIC_BASE_URL</code> を本プロキシへ向け、<code>ANTHROPIC_AUTH_TOKEN</code> にセッショントークンを設定して起動する(ADR-013)。Claude Code はこれらの環境変数を標準で尊重するため、<strong>コード改変なし</strong>で credential boundary を通過させられる。</p>
@@ -380,7 +403,7 @@ func (t *TokenSource) appJWT() (string, error) {
 
 <h2 id="s11">11. 開発プロセス — エージェントによる分業</h2>
 <p>本リポジトリのコードは、その大半を<strong>サブエージェントの分業により記述している</strong>。オーケストレーターが Issue と仕様を確定し、implementer(実装)→ tester(テスト作成・実行)→ reviewer(セキュリティ/アーキテクチャレビュー)のループを回す。tester は <code>[TEST-EXECUTION]: SUCCESS | FAIL | SPEC-ISSUE</code>、reviewer は <code>[CODE-REVIEW]: APPROVE | CONCERNS | REJECT | SPEC-ISSUE</code> という機械可読な判定を返し、<strong>SUCCESS かつ APPROVE が揃うまでマージしない</strong>。SPEC-ISSUE が返された場合はループを停止し人間へエスカレーションする。</p>
-<p>もう一つの仕組みが <strong>Stop hook による ADR 強制</strong>である。アーキテクチャ・セキュリティ境界・config に触れる変更を行ったセッションは、<code>docs/planning/adr.md</code> に ADR を追記しない限り<strong>完了がブロックされる</strong>。「後でまとめて記述する」は発生し得ない。28 本の ADR がすべてその場で記述されたのは、規律ではなく hook の強制による。</p>
+<p>もう一つの仕組みが <strong>Stop hook による ADR 強制</strong>である。アーキテクチャ・セキュリティ境界・config に触れる変更を行ったセッションは、<code>docs/planning/adr.md</code> に ADR を追記しない限り<strong>完了がブロックされる</strong>。「後でまとめて記述する」は発生し得ない。全 33 本の ADR がすべてその場で記述されたのは、規律ではなく hook の強制による。</p>
 <p>このループは形式的なものではなく、実際に複数の実バグを検出した。以下に列挙する。</p>
 <ul>
 <li><strong>path policy の <code>..</code> トラバーサル脆弱性</strong> — tester が発見(第 8 節)。glob 判定前の正規化で修正。</li>
@@ -398,7 +421,7 @@ func (t *TokenSource) appJWT() (string, error) {
 <h3>12.2 X API の従量課金</h3>
 <p>X API v2 は従量課金プランで利用している。読み取り 4 tool のみに限定し、クエリごとに <code>max_results</code> を絞り、dry-run とテストは <code>X_MCP_URL</code> 未設定時に mock 収集(ADR-017 の opt-in パターン)でコストをゼロとする構えである。LLM 費用と合わせ、日次運用コストは 1 日あたり数十円〜百円台に収まっている。</p>
 <h3>12.3 常駐構成と <code>${VAR:?}</code></h3>
-<p>常駐は単一の <code>docker-compose.yml</code> による(ADR-024)。claude-proxy・auth-proxy・egress-proxy・scheduler の 4 サービスを <code>restart: unless-stopped</code> + healthcheck で稼働させ、secrets は gitignored な <code>.env</code> と read-only の pem マウントで注入する(イメージには焼き込まない)。scheduler は docker.sock をマウントして runner を sibling 起動するため、リポジトリを<strong>ホストと同一絶対パス</strong>でマウントする、やや特殊な構成となる(runner の <code>-v</code> バインドを解決するのはホストの Docker daemon であるため)。</p>
+<p>local/dev の常駐は単一の <code>docker-compose.yml</code> による(ADR-024)。claude-proxy・auth-proxy・egress-proxy・scheduler の 4 サービスを <code>restart: unless-stopped</code> + healthcheck で稼働させ、secrets は gitignored な <code>.env</code> と read-only の pem マウントで注入する(イメージには焼き込まない)。scheduler は docker.sock をマウントして runner を sibling 起動するため、リポジトリを<strong>ホストと同一絶対パス</strong>でマウントする、やや特殊な構成となる(runner の <code>-v</code> バインドを解決するのはホストの Docker daemon であるため)。本番=k3s + ArgoCD(ADR-031)では、常駐は Deployment(scheduler / 3 proxy)+ ArgoCD の GitOps sync による。</p>
 <p>第 11 節の <code>${VAR:?}</code> 事案の結果、必須 secrets はすべてこの形式である。</p>
 <pre><code class="language-yaml">    environment:
       AUTH_PROXY_SESSION_TOKEN: ${AUTH_PROXY_SESSION_TOKEN:?AUTH_PROXY_SESSION_TOKEN is required}
@@ -409,12 +432,12 @@ func (t *TokenSource) appJWT() (string, error) {
 <h3>13.1 対応表</h3>
 <table>
 <tr><th>メルカリ pcp-agent / remote-claude</th><th>7mimi-agent での実装</th></tr>
-<tr><td>iptables DNAT でプロキシ強制</td><td>Docker <code>internal: true</code> ネットワーク + 自前 egress-proxy</td></tr>
+<tr><td>iptables DNAT でプロキシ強制</td><td>Docker <code>internal: true</code> ネットワーク + 自前 egress-proxy(compose/local-dev)。本番: NetworkPolicy + egress-proxy(ADR-032)</td></tr>
 <tr><td>集中 ACL → スコープ限定の短命 GitHub token</td><td>GitHub App installation token(TTL 1h)を auth-proxy が mint</td></tr>
 <tr><td>credential はエージェントに渡さずダミー値</td><td>runner は credential ゼロ(セッショントークンのみ)</td></tr>
 <tr><td>PreToolUse hook の決定的強制(fail-closed)</td><td>同等(Python hook + Go 認可サービス)</td></tr>
 <tr><td>PostToolUse → DX メトリクス基盤(fail-open)</td><td>PostToolUse → SQLite 監査(fail-open)+ 各 proxy の metadata-only JSON ログ</td></tr>
-<tr><td>GCE 上のセッション隔離コンテナ(copy-on-write)</td><td>セッションごとの workspace + 使い捨て sibling コンテナ</td></tr>
+<tr><td>GCE 上のセッション隔離コンテナ(copy-on-write)</td><td>セッションごとの workspace + 使い捨て sibling コンテナ(compose/local-dev)。本番: k8s Job(ADR-031)</td></tr>
 <tr><td>secrets を IaC(terraform)で一元管理</td><td><code>.env</code> + pem の手動管理(IaC 化は将来課題)</td></tr>
 <tr><td>Slack 統合(メンション起動)</td><td>Slack は通知のみ(受信は将来課題)</td></tr>
 </table>
@@ -423,7 +446,7 @@ func (t *TokenSource) appJWT() (string, error) {
 <ul>
 <li><strong>DNAT 相当の完全強制ではない</strong> — internal ネットワーク + egress-proxy は「経路を 3 本に限定する」までを達成したが、参照アーキテクチャのように<strong>全パケットを透過的に</strong>プロキシへ吸引する DNAT ほどの強制力はない。egress-proxy 自体もドメイン allowlist(<code>EGRESS_ALLOW_HOSTS</code>)を有効化しておらず、public IP の 80/443 であれば広く通過させる。一次情報確認の網羅性とのトレードオフであり、絞り込みは今後の課題である。</li>
 <li><strong><code>Bash(git:*)</code> は厳密な実行制限ではない</strong> — Claude Code の allowedTools は文字列前置きマッチであり、git には <code>-c</code> や alias 等、任意コマンド実行に近い抜け道が存在する。ADR-021 でも「コンテナ内の残存リスク(セッショントークンの egress 経由持ち出し)」として明記済みであり、最終的な防御はコンテナ側ではなく「token で可能なのは relay 経由の 1 repo への push のみ」という credential スコープに置いている。</li>
-<li><strong>proxy ポートが LAN に開いている</strong> — sibling runner が host-gateway 経由で到達する都合で 18080/18081 を全インターフェースへ bind しており、LAN 内の第三者に対してはセッション Bearer のみが防壁となる。信頼できないネットワークではホスト firewall で遮断する運用としている。</li>
+<li><strong>proxy ポートが LAN に開いている(compose/local-dev 限定)</strong> — sibling runner が host-gateway 経由で到達する都合で 18080/18081 を全インターフェースへ bind しており、LAN 内の第三者に対してはセッション Bearer のみが防壁となる。信頼できないネットワークではホスト firewall で遮断する運用としている。k8s 本番は ClusterIP のみでポート公開はなく、この既知課題は compose/local-dev に限定される。</li>
 <li><strong>ロードマップ上の未実装領域</strong> — 日本株の構造化データ(J-Quants MCP)を用いた stock research の縦断、Slack メンションからの対話起動、secrets の IaC 化等は未着手である。auth-proxy の Go 側 dev policy が <code>ai_it_topic_runner</code> しか認識していない等の整合課題も残存する。</li>
 </ul>
 <p>現在地は「完成した」ではなく「突破されても被害が限定される形に到達した」である。多層防御は、どの層が薄いかを言語化できていることまでを含めて多層防御であると考える。</p>
@@ -435,10 +458,10 @@ func (t *TokenSource) appJWT() (string, error) {
 <li>経路を限定する(internal network + 3 proxies)</li>
 <li>判定を決定的に行う(fail-closed hook、token スコープ、免責フッター)</li>
 <li>記録を必ず残す(metadata-only 監査)</li>
-<li>設計判断をその場で記録する(Stop hook が強制する 28 本の ADR)</li>
+<li>設計判断をその場で記録する(Stop hook が強制する全 33 本の ADR)</li>
 </ul>
 <p>この構造は個人開発のスケールでも十分に構築可能であった。むしろ個人開発においてこそ、「自身が休眠している間に AI が動作する」ことへの心理的障壁を下げるために、この種の構造が要請される。プロンプトで「悪意ある行動を控えるよう依頼する」ことと、悪意ある行動が構造的に不可能であることの間には、本質的な差がある。</p>
-<p>本システムのコードはすべて単一リポジトリに存在する。Go のプロキシ 3 つ、Python のオーケストレーション、hook、テスト、および設計判断の全履歴(ADR 28 本)である。追実装を試みる場合、ADR-001 から順に参照することで、mock のみの骨組みが credential-free の自律エージェントへ発展する過程を追跡できる。</p>
+<p>本システムのコードはすべて単一リポジトリに存在する。Go のプロキシ 3 つ、Python のオーケストレーション、hook、テスト、および設計判断の全履歴(ADR 全 33 本)である。追実装を試みる場合、ADR-001 から順に参照することで、mock のみの骨組みが credential-free の自律エージェントへ発展する過程を追跡できる。</p>
 <p>最後に、本システムの設計基盤を提供した参照アーキテクチャ(メルカリ pcp-agent / remote-claude)に謝意を表する。「LLM を信用しすぎない」という原則が、本レポートが報告する実装の全体を規定した。</p>
 <p class="note">対象システム: 7mimi-agent(しちみみ)。本レポートの全記述はライト/ダーク両テーマに対応し、右上のボタンで切り替えられる。</p>
 
