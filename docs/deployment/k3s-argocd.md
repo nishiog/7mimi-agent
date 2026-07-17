@@ -37,10 +37,11 @@ Secret の実体は Git に一切置かない。`deploy/k8s/` の各マニフェ
 | `7mimi-agent-secrets` | `X_BEARER_TOKEN` | auth-proxy(x-mcp、ADR-023) | 必須 |
 | `7mimi-agent-secrets` | `SLACK_BOT_TOKEN` | auth-proxy(Slack 通知、ADR-026) | 任意(未設定時は `/v1/slack/notify` が unmount され invest digest の Slack publish のみ機能しない) |
 | `7mimi-agent-secrets` | `SLACK_CHANNEL_ID` | auth-proxy | 任意(`SLACK_BOT_TOKEN` と同様) |
+| `7mimi-agent-secrets` | `JQUANTS_REFRESH_TOKEN` | auth-proxy(jq.* evidence tools、ADR-027) | 任意(未設定時は jq.* tools が unmount され `research stock` の J-Quants evidence 取得のみ機能しない) |
 | `github-app-key` | `github-app-key.pem` | auth-proxy(`GITHUB_APP_PRIVATE_KEY_PATH=/secrets/github-app-key.pem` として volume mount) | 必須 |
 | `ghcr-pull-secret` | `.dockerconfigjson` | 全 Deployment / scheduler ServiceAccount の `imagePullSecrets`(pull 用) | 任意(ghcr イメージが public の間は不要 — imagePullSecrets の参照先が無くても匿名 pull にフォールバックする。private 化する場合は必須) |
 
-注: 現時点の `deploy/k8s/` マニフェストは J-Quants 系の credential(`JQUANTS_REFRESH_TOKEN` 等)を配線していない。J-Quants MCP(ADR-027)を k8s 本番で有効化する場合は、`7mimi-agent-secrets` へのキー追加と `auth-proxy.yaml` の `secretKeyRef` 追加が別途必要になる。
+注: `JQUANTS_REFRESH_TOKEN` は issue #33 で配線済み(auth-proxy.yaml の optional secretKeyRef)。キー未投入でも他機能には影響しない。
 
 ### 投入例
 

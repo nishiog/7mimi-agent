@@ -82,6 +82,14 @@ spec:
                   name: 7mimi-agent-secrets
                   key: SLACK_CHANNEL_ID
                   optional: true
+            # ADR-027: J-Quants evidence tools (jq.*). Optional -- unset
+            # keeps the jq.* tools unmounted, same pattern as Slack above.
+            - name: JQUANTS_REFRESH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: 7mimi-agent-secrets
+                  key: JQUANTS_REFRESH_TOKEN
+                  optional: true
             # ADR-028: deterministic per-session hard cap on /mcp tool calls.
             - name: AUTH_PROXY_MCP_CALL_CAP
               value: "60"
