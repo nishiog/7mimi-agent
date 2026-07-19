@@ -286,6 +286,26 @@ class ArgoCdApplicationTest(unittest.TestCase):
         self.assertTrue(path.exists(), f"missing {path}")
         self.app = yaml.safe_load(path.read_text(encoding="utf-8"))
 
+    def test_api_version_and_kind(self) -> None:
+        self.assertEqual(self.app["apiVersion"], "argoproj.io/v1alpha1")
+        self.assertEqual(self.app["kind"], "Application")
+
+    def test_metadata_name_and_namespace(self) -> None:
+        """This Application's identity (name/namespace) is what a
+        cluster-management (private) app-of-apps entry adopts to match
+        the object already live in the cluster; changing either here is
+        a breaking change for that adoption and must be deliberate, not
+        accidental."""
+        self.assertEqual(self.app["metadata"]["name"], "7mimi-agent")
+        self.assertEqual(self.app["metadata"]["namespace"], "argocd")
+
+    def test_no_unexpected_top_level_or_metadata_fields(self) -> None:
+        """Guards against fields (e.g. finalizers) creeping in that would
+        change the live object's behavior on adoption/sync beyond the
+        reviewed spec."""
+        self.assertEqual(set(self.app.keys()), {"apiVersion", "kind", "metadata", "spec"})
+        self.assertEqual(set(self.app["metadata"].keys()), {"name", "namespace"})
+
     def test_points_at_k8s_kustomize_directory(self) -> None:
         self.assertEqual(self.app["spec"]["source"]["path"], "deploy/k8s")
 

@@ -3,6 +3,12 @@
 # ArgoCD; this file itself is not deployed by CI (build-images.yaml only
 # builds/pushes images -- rollout is ArgoCD's job, per ADR discipline: CD
 # stays out of GitHub Actions).
+#
+# Issue #35: このファイルは参照用サンプルです。実際の Application 登録は
+# クラスタ管理側リポジトリ（private、app-of-apps 管理）で行っており、手動
+# `kubectl apply` はクラスタ再構築時の緊急ブートストラップを除き不要。
+# spec を変更する場合はクラスタ管理側の Application も同時に更新し、
+# 両者の spec を一致させること。
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:

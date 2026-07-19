@@ -1,7 +1,7 @@
 # k3s + ArgoCD Deployment
 
-Status: Draft v0.2  
-Date: 2026-07-17  
+Status: Draft v0.3  
+Date: 2026-07-19  
 Owner: 7milch
 
 7mimi Agent の本番運用(k3s + ArgoCD、ADR-031 / ADR-032)の構築・運用手順をまとめる。docker-compose(ADR-024)は local/dev 用として別途 `docker-compose.yml` を参照すること。
@@ -13,13 +13,13 @@ Owner: 7milch
 
 ## ArgoCD 側の必須設定
 
-`deploy/k8s/kustomization.yaml` の `configMapGenerator` はリポジトリルートの `config/*.yaml` を参照しており、これは kustomization root(`deploy/k8s/`)の外側にあるファイルの参照にあたる。ArgoCD の repo-server がデフォルトの load restrictor でこれを拒否するため、`argocd-cm` ConfigMap に以下を設定しておくこと。
+`deploy/k8s/kustomization.yaml` の `configMapGenerator` はリポジトリルートの `config/*.yaml` を参照しており、これは kustomization root(`deploy/k8s/`)の外側にあるファイルの参照にあたる。ArgoCD の repo-server がデフォルトの load restrictor でこれを拒否するため、`argocd-cm` ConfigMap に以下が設定されている必要がある。
 
 ```yaml
 kustomize.buildOptions: "--load-restrictor LoadRestrictionsNone"
 ```
 
-これを設定しないと Application が sync できない(`kustomize build` がエラーになる)。
+この設定は ADR-035 により、クラスタ管理側リポジトリ(private、app-of-apps 構成)の ArgoCD bootstrap kustomization が argocd-cm への patch として GitOps 管理しており、手動 `kubectl patch` は不要(クラスタ再構築時も ArgoCD 自己管理の sync で再現される)。これが無いと 7mimi-agent Application が sync できない(`kustomize build` がエラーになる)。
 
 ## Secret 一覧と投入手順(runbook)
 
@@ -85,9 +85,10 @@ kubectl create secret docker-registry ghcr-pull-secret \
 ## デプロイ手順
 
 1. Secret 投入(上記 runbook)
-2. `argocd-cm` の `kustomize.buildOptions` 設定
-3. `kubectl apply -f deploy/argocd/application.yaml`(初回のみ、以降は ArgoCD が git を watch する)
-4. ArgoCD UI / `argocd app get 7mimi-agent` で sync 状態を確認する
+2. クラスタ管理側リポジトリ(private)の app-of-apps に 7mimi-agent の Application 定義が含まれており、ArgoCD ブートストラップ後に root Application 経由で自動登録される(ADR-035)。`deploy/argocd/application.yaml` は参照用サンプルであり、緊急ブートストラップ時のみ `kubectl apply -f deploy/argocd/application.yaml` で手動登録できる(spec はクラスタ管理側と同一に保つこと)
+3. ArgoCD UI / `argocd app get 7mimi-agent` で sync 状態を確認する
+
+注: ArgoCD 本体とクラスタ管理側リポジトリの credential のブートストラップは前提であり、Secret 群は本 runbook のとおり out-of-band 投入が必要(ゼロタッチ DR ではない)。
 
 ## 受け入れ検証(必須)
 
